@@ -1,0 +1,49 @@
+name: Experimental RGB shader build
+
+on:
+  push:
+    branches:
+      - feature/luxium-inspired-fast-rgb
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout MessyShaders
+        uses: actions/checkout@v4
+      - name: Checkout pinned Euphoria MIT properties
+        uses: actions/checkout@v4
+        with:
+          repository: EuphoriaPatches/propertiesFiles
+          ref: 6f7926d05ae0f4b837b812c785d959073fe2ae9e
+          path: external/euphoria-properties
+          persist-credentials: false
+      - name: Run builder unit tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Package experimental RGB shader
+        run: |
+          python3 tools/build_fast_rgb.py --euphoria-root external/euphoria-properties
+      - name: Sanity check generated shader files
+        run: |
+          python3 - <<'PY'
+          from zipfile import ZipFile
+          p='dist/MessyShaders-RGB-experimental.zip'
+          with ZipFile(p) as z:
+              assert z.testzip() is None
+              for key in ['shaders/shaders.properties',
+                          'shaders/block.properties',
+                          'shaders/item.properties',
+                          'shaders/lib/messy_fast_lights.glsl']:
+                  assert key in z.namelist(), key
+          print('Pack structure valid (not a GLSL compile or GPU benchmark).')
+          PY
+      - name: Upload experimental pack and build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: messyshaders-rgb-experimental
+          path: dist/MessyShaders-RGB-experimental.zip
+          if-no-files-found: error
