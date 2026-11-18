@@ -56,6 +56,9 @@ class FastRgbTests(unittest.TestCase):
                 "shaders/common/solid_blocks_vertex.glsl":
                     '#include "/lib/basic_utils.glsl"\n#include "/lib/luma.glsl"\nvarying vec3 omni_light;\n'
                     '#include "/src/position_vertex.glsl"\nvoid main() {}\n',
+                "shaders/common/water_blocks_vertex.glsl":
+                    '#include "/lib/luma.glsl"\n'
+                    '#include "/src/light_vertex.glsl"\n',
                 "shaders/common/solid_blocks_fragment.glsl":
                     'varying vec3 direct_light_color, candle_color, omni_light;\n'
                     '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
@@ -89,6 +92,10 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn('#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', vertex)
                 self.assertLess(vertex.index('#include "/lib/luma.glsl"'),
                                 vertex.index('#include "/lib/messy_fast_lights.glsl"'))
+                water_vertex = z.read("shaders/common/water_blocks_vertex.glsl").decode()
+                self.assertIn('#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', water_vertex)
+                self.assertLess(water_vertex.index('#include "/lib/messy_fast_lights.glsl"'),
+                                water_vertex.index('#include "/src/light_vertex.glsl"'))
                 self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("image.messyEmitVolume",
                               z.read("shaders/shaders.properties").decode())
