@@ -45,14 +45,14 @@ def main():
     ]
     for name in checks:
         text = flatten(name, files)
-        match = re.match(r"#version\\s+(120|430 compatibility)", text)
+        match = re.match(r"#version\s+(120|430 compatibility)", text)
         if not match:
             raise RuntimeError(f"Unexpected shader version in {name}")
         # Offline validator needs a high-enough *compatibility* profile to
         # accept existing E-Lite attributes and the experimental GL4 images.
         # Do not modify the actual ZIP's GLSL version here.
         text = text[:match.start()] + (
-            "#version 430 compatibility\\n#define IS_IRIS 1\\n"
+            "#version 430 compatibility\n#define IS_IRIS 1\n"
             "#define MC_VERSION 12101"
         ) + text[match.end():]
         stage = "vert" if name.endswith(".vsh") else "frag"
