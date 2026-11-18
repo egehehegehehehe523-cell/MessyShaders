@@ -54,7 +54,7 @@ class FastRgbTests(unittest.TestCase):
                     "start\n#ifdef DYN_HAND_LIGHT\nold\n#endif\n"
                     "#if defined GBUFFER_HAND\nend\n",
                 "shaders/common/solid_blocks_vertex.glsl":
-                    '#include "/lib/basic_utils.glsl"\nvarying vec3 omni_light;\n'
+                    '#include "/lib/basic_utils.glsl"\n#include "/lib/luma.glsl"\nvarying vec3 omni_light;\n'
                     '#include "/src/position_vertex.glsl"\nvoid main() {}\n',
                 "shaders/common/solid_blocks_fragment.glsl":
                     'varying vec3 direct_light_color, candle_color, omni_light;\n'
@@ -85,6 +85,10 @@ class FastRgbTests(unittest.TestCase):
                 self.assertNotIn("E-Lite-archive/shaders/shaders.properties", z.namelist())
                 self.assertIn("26100", z.read("shaders/lib/messy_fast_lights.glsl").decode())
                 self.assertIn("MESSY_TONE", z.read("shaders/lib/config.glsl").decode())
+                vertex = z.read("shaders/common/solid_blocks_vertex.glsl").decode()
+                self.assertIn('#include "/lib/luma.glsl"\\n#include "/lib/messy_fast_lights.glsl"', vertex)
+                self.assertLess(vertex.index('#include "/lib/luma.glsl"'),
+                                vertex.index('#include "/lib/messy_fast_lights.glsl"'))
                 self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("image.messyEmitVolume",
                               z.read("shaders/shaders.properties").decode())
