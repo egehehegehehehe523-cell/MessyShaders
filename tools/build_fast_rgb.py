@@ -269,8 +269,8 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
         "https://github.com/EuphoriaPatches/propertiesFiles\n"
         "Custom palette + adaptation: MessyShaders. Luxium and Complementary are\n"
         "architecture/visual references ONLY. No code from either is included.\n"
-        "Only cheap held-item RGB and visible emitter surface tint are implemented.\n"
-        "NOT yet voxel lighting, dropped-item light, full IPBR+, or a proven FPS win.\n"
+        "Basic nearby block-light RGB voxel diffusion now experimental.\n"
+        "NOT yet exact occlusion, dropped-item light, full IPBR+, or measured GPU speed.\n"
     ).encode()
     payload["LICENSES/EUPHORIA-PROPERTIES-MIT.txt"] = (ROOT / "licenses" / "EUPHORIA-PROPERTIES-MIT.txt").read_bytes()
     # True spatial RGB light prototype, independent of the fake held-item path.
