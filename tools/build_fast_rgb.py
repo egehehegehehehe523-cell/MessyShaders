@@ -223,7 +223,7 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     path = "shaders/common/water_blocks_vertex.glsl"
     body = payload[path].decode("utf-8")
     body = patch_once(body, '#include "/lib/luma.glsl"',
-                      '#include "/lib/luma.glsl"\\n#include "/lib/messy_fast_lights.glsl"', path)
+                      '#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', path)
     payload[path] = body.encode()
 
     path = "shaders/src/light_vertex.glsl"
