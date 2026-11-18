@@ -73,7 +73,7 @@ class FastRgbTests(unittest.TestCase):
                     '    #ifdef POM\n    #endif\n#endif\n'
                     '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING\n#endif\n'
                     '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL\n#endif\n'
-                    '    // === PBR auxiliary\n'
+                    '    pure_block_color = texture2D(tex, final_uv);\n'\n                    '    // === PBR auxiliary\n'
                     '    #if defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
                     '        vec3 bumpedNormal;\n'
                     '    #else\n'
@@ -122,6 +122,12 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn('#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', water_vertex)
                 self.assertLess(water_vertex.index('#include "/lib/messy_fast_lights.glsl"'),
                                 water_vertex.index('#include "/src/light_vertex.glsl"'))
+                self.assertIn("coverage_coating", z.read("MESSYSHADERS_BUILD.json").decode())
+                self.assertIn("MESSY_COATED_TEXTURES", z.read("shaders/lib/config.glsl").decode())
+                self.assertIn("MESSY_IPBR_RELIEF", z.read("shaders/lib/config.glsl").decode())
+                self.assertIn("entity.26210", z.read("shaders/entity.properties").decode())
+                self.assertIn("if (entity == 10201)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
+                self.assertIn("Normal Map Strength", z.read("shaders/lang/en_US.lang").decode())
                 self.assertIn("dynamic_ipbr", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("entity.26201", z.read("shaders/entity.properties").decode())
                 self.assertIn("messyWriteDynamicVoxel", z.read("shaders/common/shadow_vertex.glsl").decode())
