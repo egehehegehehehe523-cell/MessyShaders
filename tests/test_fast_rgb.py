@@ -63,6 +63,9 @@ class FastRgbTests(unittest.TestCase):
                     '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR\n'
                     '        sub_position3 = sub_position.xyz;\n#endif\n'
                     '#include "/src/position_vertex.glsl"\nvoid main() {}\n',
+                "shaders/common/water_blocks_vertex.glsl":
+                    '#include "/lib/luma.glsl"\n'
+                    '#include "/src/light_vertex.glsl"\n',
                 "shaders/common/solid_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
                     'varying vec3 direct_light_color, candle_color, omni_light;\n'
