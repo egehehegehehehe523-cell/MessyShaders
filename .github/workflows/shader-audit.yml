@@ -1,0 +1,26 @@
+name: Shader audit and E-Lite comparison baseline
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.zip'
+      - 'tools/audit_packs.py'
+      - '.github/workflows/shader-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect source archives and package an unchanged E-Lite baseline
+        run: python3 tools/audit_packs.py
+      - name: Upload inspection and baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: MessyShaders-audit-and-unmodified-ELite-baseline
+          path: |
+            dist/audit.json
+            dist/MessyShaders-E-Lite-baseline.zip
+          if-no-files-found: error
