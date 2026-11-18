@@ -54,14 +54,37 @@ class FastRgbTests(unittest.TestCase):
                     "start\n#ifdef DYN_HAND_LIGHT\nold\n#endif\n"
                     "#if defined GBUFFER_HAND\nend\n",
                 "shaders/common/solid_blocks_vertex.glsl":
-                    '#include "/lib/basic_utils.glsl"\n#include "/lib/luma.glsl"\nvarying vec3 omni_light;\n'
+                    '#include "/lib/basic_utils.glsl"\n#include "/lib/luma.glsl"\n'
+                    'varying vec3 omni_light;\n'
+                    '#if WAVING == 1 || defined LabPBR\n#endif\n'
+                    '#if defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n#endif\n'
+                    '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING\n#endif\n'
+                    '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL\n#endif\n'
+                    '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR\n'
+                    '        sub_position3 = sub_position.xyz;\n#endif\n'
                     '#include "/src/position_vertex.glsl"\nvoid main() {}\n',
-                "shaders/common/water_blocks_vertex.glsl":
-                    '#include "/lib/luma.glsl"\n'
-                    '#include "/src/light_vertex.glsl"\n',
                 "shaders/common/solid_blocks_fragment.glsl":
+                    '#include "/lib/luma.glsl"\n'
                     'varying vec3 direct_light_color, candle_color, omni_light;\n'
+                    '#if defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
+                    '    #ifdef POM\n    #endif\n#endif\n'
+                    '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING\n#endif\n'
+                    '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL\n#endif\n'
+                    '    // === PBR auxiliary\n'
+                    '    #if defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
+                    '        vec3 bumpedNormal;\n'
+                    '    #else\n'
+                    '        #if MATERIAL_GLOSS < 1\n'
+                    '            vec3 bumpedNormal = vec3(1.0);\n'
+                    '        #else\n            vec3 bumpedNormal = flat_normal;\n        #endif\n    #endif\n'
+                    '    #if !defined NETHER && defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
+                    '    #endif\n'
+                    '            float final_gloss_power = glossParms.g;\n'
+                    '            float block_luma2 = pow(block_luma * glossParms.b, glossParms.a);\n'
+                    '            float isMetal = 0.0;\n'
+                    '            f0_val = reflex_index2;\n'
                     '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
+                "shaders/entity.properties": "entity.10101=minecraft:lightning_bolt\n",
                 "shaders/common/shadow_vertex.glsl":
                     'attribute vec4 mc_Entity;\n    worldPos = positions.xyz;\n',
                 "shaders/world0/shadow.vsh": "#version 120\n",
@@ -96,6 +119,11 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn('#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', water_vertex)
                 self.assertLess(water_vertex.index('#include "/lib/messy_fast_lights.glsl"'),
                                 water_vertex.index('#include "/src/light_vertex.glsl"'))
+                self.assertIn("dynamic_ipbr", z.read("MESSYSHADERS_BUILD.json").decode())
+                self.assertIn("entity.26201", z.read("shaders/entity.properties").decode())
+                self.assertIn("messyWriteDynamicVoxel", z.read("shaders/common/shadow_vertex.glsl").decode())
+                self.assertIn("MESSY_IPBR", z.read("shaders/lib/config.glsl").decode())
+                self.assertIn("messyGeneratedNormal", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("image.messyEmitVolume",
                               z.read("shaders/shaders.properties").decode())
