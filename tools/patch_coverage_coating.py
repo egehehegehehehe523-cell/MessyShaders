@@ -162,7 +162,7 @@ def coated_textures(pack: dict[str, bytes]):
     # material, and requires no extra texture lookup/pass.
     path="shaders/common/solid_blocks_fragment.glsl"
     anchor="    lowp float block_luma = luma(block_color.rgb);"
-    coat=StringPatchCoat = '''
+    coat = '''
     #if defined MESSY_COATED_TEXTURES && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
         // Sprite-local micrograin: cheap arithmetic and no additional map.
         // Keep atlas tessellation and mip filtering stable on modded textures.
