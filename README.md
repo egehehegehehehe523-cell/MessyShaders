@@ -12,6 +12,22 @@ Supplied comparison archives:
 
 See [the fast-path audit](docs/FAST_PATH_AUDIT.md).
 
+## Expanded Euphoria light coverage and raised/coated textures
+
+The latest experimental ZIP adds a controlled import from the **Euphoria Patches MIT entity classification data**. The pinned catalogue currently contributes 230 modded entity candidates across 20 eligible lighting groups, while retaining E-Lite's original IDs. Additional classified vanilla categories include allay, vex, experience orb, enderman, drowned, stray, trident, bogged, creaking, parched, zombie nautilus, spectral arrow, eye of ender, and the **entity-flame renderer**. It can also treat a dropped item rendered using one of our classified block IDs as a light.
+
+**Important qualification:** Classification is broad; some modded entities grouped with luminous vanilla mobs are not themselves emissive. The technique works only for sources visible to the shadow-rendering pass, and cannot infer NBT data such as whether an ordinary arrow is burning. Flame effects are supported through their actual `entity_flame` render classification when Iris exposes that pass. This is not perfect Complementary r5.10 parity.
+
+Texture controls under **Messy Features**:
+- **Normal Map Strength:** generated per-texture normals from neighbouring albedo texels. Works on modded terrain/block textures automatically.
+- **Raised Texture Depth / Relief Depth:** inexpensive one-step sprite-clamped parallax effect. This shifts visible texture samples, **not the actual block geometry or silhouettes**. More depth increases distortion at grazing angles.
+- **Coated Textures / Coating Strength:** a very inexpensive, nonreflective procedural micrograin coating over albedo. This is *not* a clearcoat specular layer. No extra texture sample is required for the coating itself.
+- Authored LabPBR maps retain precedence over generated normals and parallax in the shader. The coating is independently configurable.
+
+All options are enabled initially for visual testing; **GPU cost is not yet measured**. To compare performance, disable Coated Textures, Raised Texture Depth, or Generated PBR independently and compare consistent scenes.
+
+These implementations are independently written. No code from Complementary's restricted shader sources was copied; Euphoria's classifications are MIT licensed and their notice is bundled.
+
 ## Experimental moving lights + generated PBR (new)
 
 The build now includes **experimental dynamic coloured lights** using Iris shadow-stage `currentRenderedItemId` and `entityId`. Dropped/rendered items classified by Euphoria's MIT-licensed item light list and selected vanilla luminous entities (blaze, glow squid, magma cube, end crystal, fireballs and fireworks) write into the **existing** RGB voxel volume. Placed fire, soul fire and lava are also classified as coloured emitters. It requires entities to be rendered in the shadow pass. This is not full Complementary r5.10 dynamic-light parity; it does not yet detect arbitrary burning mobs, particle light emission or mod-specific moving bosses.
