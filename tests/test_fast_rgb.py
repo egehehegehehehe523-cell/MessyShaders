@@ -86,7 +86,7 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("26100", z.read("shaders/lib/messy_fast_lights.glsl").decode())
                 self.assertIn("MESSY_TONE", z.read("shaders/lib/config.glsl").decode())
                 vertex = z.read("shaders/common/solid_blocks_vertex.glsl").decode()
-                self.assertIn('#include "/lib/luma.glsl"\\n#include "/lib/messy_fast_lights.glsl"', vertex)
+                self.assertIn('#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', vertex)
                 self.assertLess(vertex.index('#include "/lib/luma.glsl"'),
                                 vertex.index('#include "/lib/messy_fast_lights.glsl"'))
                 self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
