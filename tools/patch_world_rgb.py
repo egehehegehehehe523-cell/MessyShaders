@@ -150,7 +150,10 @@ def patch_shadow(pack: dict[str, bytes]) -> None:
     for dimension in ("world0", "world-1", "world1"):
         for ext in ("vsh", "fsh"):
             path = f"shaders/{dimension}/shadow.{ext}"
-            patch(pack, path, "#version 120", "#version 430 compatibility")
+            # E-Lite disables Nether shadows and omits those wrappers.
+            # Don't synthesize a new shadow pass without a separate test.
+            if path in pack:
+                patch(pack, path, "#version 120", "#version 430 compatibility")
 
 
 def patch_gbuffers(pack: dict[str, bytes]) -> None:
