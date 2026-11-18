@@ -149,24 +149,24 @@ def add_procedural_ipbr(files: dict[str, bytes]) -> dict:
     replace_all_checked(files, vertex, cond, either)
     replace_all_checked(files, vertex, "#if WAVING == 1 || defined LabPBR",
                         "#if WAVING == 1 || defined LabPBR || defined MESSY_IPBR")
+    replace_all_checked(files, vertex,
+                        "|| defined LabPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL",
+                        "|| defined LabPBR || defined MESSY_IPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL")
     replace_all_checked(files, vertex, "|| defined LabPBR || defined SHADOW_CASTING",
                         "|| defined LabPBR || defined MESSY_IPBR || defined SHADOW_CASTING")
     replace_all_checked(files, vertex,
                         "|| defined LabPBR\n        sub_position3 = sub_position.xyz;",
                         "|| defined LabPBR || defined MESSY_IPBR\n        sub_position3 = sub_position.xyz;")
-    replace_all_checked(files, vertex,
-                        "|| defined LabPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL",
-                        "|| defined LabPBR || defined MESSY_IPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL")
 
     # Only share the varying declaration, do not read a LabPBR texture in
     # generated-PBR mode: it must still work without resource-pack maps.
     patch_one(files, fragment, "#if defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n    #ifdef POM",
               "#if " + either + "\n    #ifdef POM")
-    replace_all_checked(files, fragment, "|| defined LabPBR || defined SHADOW_CASTING",
-                        "|| defined LabPBR || defined MESSY_IPBR || defined SHADOW_CASTING")
     replace_all_checked(files, fragment,
                         "|| defined LabPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL",
                         "|| defined LabPBR || defined MESSY_IPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL")
+    replace_all_checked(files, fragment, "|| defined LabPBR || defined SHADOW_CASTING",
+                        "|| defined LabPBR || defined MESSY_IPBR || defined SHADOW_CASTING")
     patch_one(files,fragment,
               '#include "/lib/luma.glsl"',
               '#include "/lib/luma.glsl"\n#include "/lib/messy_procedural_pbr.glsl"\n#ifdef MESSY_IPBR\nuniform ivec2 atlasSize;\n#endif')
