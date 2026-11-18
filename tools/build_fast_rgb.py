@@ -272,6 +272,7 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
         "Only cheap held-item RGB and visible emitter surface tint are implemented.\n"
         "NOT yet voxel lighting, dropped-item light, full IPBR+, or a proven FPS win.\n"
     ).encode()
+    payload["LICENSES/EUPHORIA-PROPERTIES-MIT.txt"] = (ROOT / "licenses" / "EUPHORIA-PROPERTIES-MIT.txt").read_bytes()
     payload["MESSYSHADERS_BUILD.json"] = json.dumps(report, indent=2).encode()
     return report
 
