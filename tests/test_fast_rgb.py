@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from zipfile import ZipFile
 
+from tools.patch_coverage_coating import parse_entities, expand_entities
 from tools.build_fast_rgb import (
     apply_overrides, build, emitter_entries, parse_properties,
     rewrite_property_table, BLOCK_IDS, ITEM_IDS,
@@ -42,6 +43,28 @@ class FastRgbTests(unittest.TestCase):
             self.assertIn("example:blue_lamp", blocks["blue"])
             self.assertIn("example:red_beacon", items["red"])
             self.assertIn("example:blue_lamp", items["blue"])
+
+    def test_mit_entity_groups_preserve_existing_ids(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "entity.properties").write_text(
+                "entity.50020 = blaze \\\n modded:fire_spirit\\\n modded:fire_projectile\n"
+                "entity.50048 = glow_squid modded:glow_fish\n"
+                "entity.50088 = entity_flame modded:custom_flame\n",
+                encoding="utf-8")
+            pack = {"shaders/entity.properties": (
+                "entity.10101=minecraft:lightning_bolt\n"
+                "entity.10201=minecraft:entity_flame\n"
+                "entity.26200=blaze\n"
+            ).encode()}
+            report = expand_entities(pack, root)
+            assigned = parse_entities(pack["shaders/entity.properties"].decode())
+            self.assertIn("modded:fire_spirit", assigned[26200])
+            self.assertIn("modded:glow_fish", assigned[26201])
+            self.assertIn("modded:custom_flame", assigned[26221])
+            self.assertEqual(assigned[10201], ["minecraft:entity_flame"])
+            self.assertNotIn("entity_flame", assigned[26221])
+            self.assertEqual(report["mit_entity_groups"], 3)
 
     def test_zip_build(self):
         with tempfile.TemporaryDirectory() as td:
