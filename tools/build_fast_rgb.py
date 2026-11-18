@@ -283,7 +283,7 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
         "Custom palette + adaptation: MessyShaders. Luxium and Complementary are\n"
         "architecture/visual references ONLY. No code from either is included.\n"
         "Basic nearby block-light RGB voxel diffusion now experimental.\n"
-        "NOT yet exact occlusion, dropped-item light, full IPBR+, or measured GPU speed.\n"
+        "NOT yet exact occlusion, complete r5.10 entity parity, full IPBR+, or measured GPU speed.\n"
     ).encode()
     payload["LICENSES/EUPHORIA-PROPERTIES-MIT.txt"] = (ROOT / "licenses" / "EUPHORIA-PROPERTIES-MIT.txt").read_bytes()
     # True spatial RGB light prototype, independent of the fake held-item path.
@@ -292,12 +292,19 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_world_rgb import apply_world_rgb
     report["world_rgb"] = apply_world_rgb(payload)
+    # Drop/item/entity light emitters and shader-side generated PBR.
+    try:
+        from .patch_dynamic_ipbr import apply_dynamic_ipbr
+    except ImportError:
+        from patch_dynamic_ipbr import apply_dynamic_ipbr
+    report["dynamic_ipbr"] = apply_dynamic_ipbr(payload)
     report["limitations"] = [
         "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
         "Approximate voxel occlusion; thin/translucent block correctness pending",
         "Light sources collected from shadow geometry, not all loaded chunks",
-        "No dynamic entities/dropped items yet",
-        "No IntegratedPBR+ implementation",
+        "Only shadow-rendered item and selected entity sources tracked; not all entity types",
+        "Dynamic RGB is not yet guaranteed correct for every modded emitter",
+        "Procedural PBR approximation; no full Complementary IntegratedPBR+ parity",
         "No Luxium renderer code",
     ]
     payload["MESSYSHADERS_BUILD.json"] = json.dumps(report, indent=2).encode()
