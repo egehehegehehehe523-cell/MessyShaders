@@ -2,7 +2,7 @@
 
 A modpack-specific high-performance Iris shader project for Minecraft 1.21.1.
 
-**Status:** Research and baseline packaging, NOT YET a new custom shader renderer.
+**Status:** Experimental RGB lighting renderer; not Iris-tested or performance-qualified.
 
 Supplied comparison archives:
 - MakeUp Ultra Fast 9.6 (lightweight shadow/effect baseline).
@@ -14,11 +14,11 @@ See [the fast-path audit](docs/FAST_PATH_AUDIT.md).
 
 ## Experimental high-performance RGB branch
 
-**The first experimental build is NOT a complete shader.** This branch contains an E-Lite-derived shader ZIP with a thirteen-colour palette, coloured emitter surfaces, a bounded fake coloured handheld-light effect, original warm/cool grading and automated import of the MIT-licensed Euphoria block/item light-source classifications.
+**The new world-light prototype is NOT a complete shader.** It combines the existing E-Lite coloured held-light and visible emitter surfaces with a **48×48×48 world-space voxel RGB volume** collected from the original shadow draw. Six lightweight compute diffusion steps extend placed light to neighbouring geometry. Blocks can approximately obstruct light; complex translucent geometry and offscreen chunk coverage are unverified. This version still includes the MIT-licensed Euphoria classification importer.
 
-**Already built:** GitHub Actions workflow **Experimental RGB shader build** generates a valid shader ZIP as a downloadable `messyshaders-rgb-experimental` artifact. It runs four builder tests and packages E-Lite + the classification generator; it does not run Iris/GLSL compilation or in-game FPS measurements. The Euphoria reference data is pinned in CI and MIT permission notice is bundled with the archive.
+**Already built:** GitHub Actions workflow **Experimental RGB shader build** generates a valid shader ZIP as a downloadable `messyshaders-rgb-experimental` artifact. It runs four builder tests and packages E-Lite, the Euphoria classification generator and an experimental Iris custom-image/compute propagation implementation; it does not run Iris/GLSL compilation or in-game FPS measurements. The Euphoria reference data is pinned in CI and MIT permission notice is bundled with the archive.
 
-**Not yet implemented:** occluded multi-source world RGB lighting, independent dynamic dropped items/entities/projectiles, IntegratedPBR+-equivalent built-in materials, and GPU-cache/shadow ideas from Luxium. The RGB look of this alpha should not be mistaken for proper coloured world light.
+**Not yet implemented:** verified Iris rendering, exact/complete occlusion, independently tracked dropped-item/entity/projectile lights, IntegratedPBR+-equivalent built-in materials, and dirty-region GPU caching. World RGB requires Iris custom images + compute (OpenGL 4.3) and an existing working shadow pass. **The Overworld is the initial test target; the Nether lacks E-Lite shadow programs.** GPU overhead, correctness and Voxy transitions still need measurement.
 
 Build locally with Python 3 and the supplied E-Lite ZIP:
 
