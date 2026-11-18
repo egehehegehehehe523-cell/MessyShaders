@@ -273,6 +273,20 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
         "NOT yet voxel lighting, dropped-item light, full IPBR+, or a proven FPS win.\n"
     ).encode()
     payload["LICENSES/EUPHORIA-PROPERTIES-MIT.txt"] = (ROOT / "licenses" / "EUPHORIA-PROPERTIES-MIT.txt").read_bytes()
+    # True spatial RGB light prototype, independent of the fake held-item path.
+    try:
+        from .patch_world_rgb import apply_world_rgb
+    except ImportError:
+        from patch_world_rgb import apply_world_rgb
+    report["world_rgb"] = apply_world_rgb(payload)
+    report["limitations"] = [
+        "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
+        "Approximate voxel occlusion; thin/translucent block correctness pending",
+        "Light sources collected from shadow geometry, not all loaded chunks",
+        "No dynamic entities/dropped items yet",
+        "No IntegratedPBR+ implementation",
+        "No Luxium renderer code",
+    ]
     payload["MESSYSHADERS_BUILD.json"] = json.dumps(report, indent=2).encode()
     return report
 
