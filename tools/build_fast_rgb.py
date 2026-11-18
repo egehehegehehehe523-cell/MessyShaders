@@ -298,6 +298,11 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_dynamic_ipbr import apply_dynamic_ipbr
     report["dynamic_ipbr"] = apply_dynamic_ipbr(payload)
+    try:
+        from .patch_coverage_coating import patch_full_coverage_coating
+    except ImportError:
+        from patch_coverage_coating import patch_full_coverage_coating
+    report["coverage_coating"] = patch_full_coverage_coating(payload, euphoria_root)
     report["limitations"] = [
         "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
         "Approximate voxel occlusion; thin/translucent block correctness pending",
