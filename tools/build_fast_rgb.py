@@ -42,10 +42,10 @@ ITEM_IDS = {color: 26100 + i for i, color in enumerate(PALETTE)}
 
 # Vanilla seeded sources work even without an optional Euphoria checkout.
 VANILLA_BLOCKS = {
-    "orange": ["minecraft:torch", "minecraft:wall_torch", "minecraft:lantern",
+    "orange": ["minecraft:fire", "minecraft:lava", "minecraft:torch", "minecraft:wall_torch", "minecraft:lantern",
                "minecraft:campfire:lit=true", "minecraft:shroomlight",
                "minecraft:jack_o_lantern"],
-    "blue": ["minecraft:soul_torch", "minecraft:soul_wall_torch",
+    "blue": ["minecraft:soul_fire", "minecraft:soul_torch", "minecraft:soul_wall_torch",
              "minecraft:soul_lantern", "minecraft:soul_campfire:lit=true"],
     "cyan": ["minecraft:sea_lantern", "minecraft:conduit"],
     "yellow": ["minecraft:glowstone", "minecraft:ochre_froglight"],
@@ -282,7 +282,7 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
         "https://github.com/EuphoriaPatches/propertiesFiles\n"
         "Custom palette + adaptation: MessyShaders. Luxium and Complementary are\n"
         "architecture/visual references ONLY. No code from either is included.\n"
-        "Basic nearby block-light RGB voxel diffusion now experimental.\n"
+        "Block/item RGB, selected moving lights, and texture-generated normals tested offline.\n"
         "NOT yet exact occlusion, complete r5.10 entity parity, full IPBR+, or measured GPU speed.\n"
     ).encode()
     payload["LICENSES/EUPHORIA-PROPERTIES-MIT.txt"] = (ROOT / "licenses" / "EUPHORIA-PROPERTIES-MIT.txt").read_bytes()
