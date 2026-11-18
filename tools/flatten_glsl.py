@@ -57,7 +57,8 @@ def main():
         # Do not modify the actual ZIP's GLSL version here.
         text = text[:match.start()] + (
             "#version 430 compatibility\n#define IS_IRIS 1\n"
-            "#define MC_VERSION 12101"
+            "#define MC_VERSION 12101\n"
+            "#define MC_RENDER_STAGE_OUTLINE 100"
         ) + text[match.end():]
         stage = "vert" if name.endswith(".vsh") else "frag"
         ident = name.replace("/", "__").replace(".vsh", "").replace(".fsh", "")
