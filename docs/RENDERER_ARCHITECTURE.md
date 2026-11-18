@@ -2,7 +2,7 @@
 
 Target: NeoForge 1.21.1 + Iris + Neo-Voxy, heavy animated entities and many modded emissive lights, GPU-bound hardware. The objective is **full-feature performance**, not a featureless benchmark preset.
 
-**Status as of 18 November 2026:** The experimental RGB ZIP is a real, buildable **shader pack archive**, but it is only the **classified emitter and coloured held-light prototype**. Unit tests/packaging pass. No Iris GLSL compile, test-world render, GPU timing or full RGB world lighting has been confirmed.
+**Status as of 18 November 2026:** The experimental RGB ZIP is a real, buildable **shader pack archive**, and now includes an **unverified 48³ Iris voxel RGB world-light prototype**. Unit tests/packaging pass. No Iris GLSL compile, test-world render, GPU timing or complete RGB world-light correctness has been confirmed.
 
 ## Reference ownership and licences
 
@@ -20,7 +20,9 @@ Target: NeoForge 1.21.1 + Iris + Neo-Voxy, heavy animated entities and many modd
 - Add block/item/entity classification tables as **data**, not branches in the fragment shader. Missing/unregistered modded sources fall back to neutral lighting.
 - The initial prototype colours source surfaces and a small fake held-light radius. It **does not** fulfil world RGB; explicit fallback, not the end state.
 
-### Phase B: full coloured RGB world lighting (not yet implemented)
+### Phase B: full coloured RGB world lighting (bounded first prototype added)
+
+**Prototype implementation:** `tools/patch_world_rgb.py` captures visible shadow geometry into 48³ `R32UI` occupancy/emitter grids each frame, then runs a seed + six 6-neighbour diffusion compute passes into two `RGBA16F` light volumes. Opaque blocks approximate occlusion; RGB is added in the existing E-Lite surface lighting path. This uses Iris' custom 3D image and compute APIs, not Luxium code. Sources off-screen but inside the shadow pass may be captured; not guaranteed across shader culling/other dimensions. Overworld should be tested first. This is a **correctness prototype**, not the final low-cost incremental/cache approach: no dirty-region handling, no full dynamic emitter list, and no GPU measurements. The new volume may be too expensive for GPU-bound setups; do not assume otherwise.
 
 Compare these implementations with *identical features*:
 
