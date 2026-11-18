@@ -218,6 +218,18 @@ def add_procedural_ipbr(files: dict[str, bytes]) -> dict:
         "#define MESSY_IPBR_NORMAL_STRENGTH 2.5 // [0.0 1.0 1.5 2.5 4.0]\n"
         "#define MESSY_DYNAMIC_EMITTERS\n"
         + config).encode("utf-8")
+    # Small test menu: toggle expensive procedural sampling and entity draws
+    # independently when comparing GPU frame times against the base shader.
+    props_path = "shaders/shaders.properties"
+    props = files[props_path].decode("utf-8")
+    props = props.replace("[LabPBR] [INFO_SCREEN]", "[LabPBR] [MESSY_FEATURES] [INFO_SCREEN]")
+    props += (
+        "\n# MessyShaders experimental feature switches.\n"
+        "screen.MESSY_FEATURES.columns=2\n"
+        "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_IPBR "
+        "MESSY_IPBR_NORMAL_STRENGTH <empty> PERF_IMPACT\n"
+    )
+    files[props_path] = props.encode("utf-8")
     return {
         "enabled_by_default": True,
         "terrain_block_textures": True,
