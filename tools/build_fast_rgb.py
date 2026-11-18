@@ -209,8 +209,11 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     payload["shaders/lib/messy_fast_lights.glsl"] = palette_glsl().encode()
     path = "shaders/common/solid_blocks_vertex.glsl"
     body = payload[path].decode("utf-8")
-    body = patch_once(body, '#include "/lib/basic_utils.glsl"',
-                      '#include "/lib/basic_utils.glsl"\n#include "/lib/messy_fast_lights.glsl"', path)
+    # The generated palette references CANDLE_BASELIGHT, which expands to
+    # normalizeLuma(CANDLE_COLOR, 0.2). E-Lite defines normalizeLuma in
+    # lib/luma.glsl, so the palette must be included AFTER that function.
+    body = patch_once(body, '#include "/lib/luma.glsl"',
+                      '#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', path)
     payload[path] = body.encode()
 
     path = "shaders/src/light_vertex.glsl"
