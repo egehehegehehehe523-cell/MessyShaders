@@ -216,6 +216,16 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
                       '#include "/lib/luma.glsl"\n#include "/lib/messy_fast_lights.glsl"', path)
     payload[path] = body.encode()
 
+    # E-Lite's translucent/water renderer also includes the shared
+    # src/light_vertex.glsl. It does not include solid_blocks_vertex.glsl.
+    # Both callers must define messyRgbColor, and the helper must follow
+    # lib/luma.glsl so CANDLE_BASELIGHT can resolve normalizeLuma.
+    path = "shaders/common/water_blocks_vertex.glsl"
+    body = payload[path].decode("utf-8")
+    body = patch_once(body, '#include "/lib/luma.glsl"',
+                      '#include "/lib/luma.glsl"\\n#include "/lib/messy_fast_lights.glsl"', path)
+    payload[path] = body.encode()
+
     path = "shaders/src/light_vertex.glsl"
     body = payload[path].decode("utf-8")
     a = body.index("#ifdef DYN_HAND_LIGHT")
