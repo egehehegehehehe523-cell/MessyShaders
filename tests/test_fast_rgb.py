@@ -49,7 +49,7 @@ class FastRgbTests(unittest.TestCase):
             zsource = root / "source.zip"
             zout = root / "result.zip"
             src = {
-                "shaders/shaders.properties": "# test\n",
+                "shaders/shaders.properties": "# test\n#ifdef SHADOW_ENTITIES\n    shadowEntities = true\n#else\n    shadowEntities = false\n#endif\n",
                 "shaders/src/light_vertex.glsl":
                     "start\n#ifdef DYN_HAND_LIGHT\nold\n#endif\n"
                     "#if defined GBUFFER_HAND\nend\n",
