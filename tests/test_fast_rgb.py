@@ -54,7 +54,19 @@ class FastRgbTests(unittest.TestCase):
                     "start\n#ifdef DYN_HAND_LIGHT\nold\n#endif\n"
                     "#if defined GBUFFER_HAND\nend\n",
                 "shaders/common/solid_blocks_vertex.glsl":
-                    '#include "/lib/basic_utils.glsl"\nvoid main() {}\n',
+                    '#include "/lib/basic_utils.glsl"\nvarying vec3 omni_light;\n'
+                    '#include "/src/position_vertex.glsl"\nvoid main() {}\n',
+                "shaders/common/solid_blocks_fragment.glsl":
+                    'varying vec3 direct_light_color, candle_color, omni_light;\n'
+                    '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
+                "shaders/common/shadow_vertex.glsl":
+                    'attribute vec4 mc_Entity;\n    worldPos = positions.xyz;\n',
+                "shaders/world0/shadow.vsh": "#version 120\n",
+                "shaders/world0/shadow.fsh": "#version 120\n",
+                "shaders/world-1/shadow.vsh": "#version 120\n",
+                "shaders/world-1/shadow.fsh": "#version 120\n",
+                "shaders/world1/shadow.vsh": "#version 120\n",
+                "shaders/world1/shadow.fsh": "#version 120\n",
                 "shaders/common/final_fragment.glsl":
                     "block_color = pow(block_color.rgb, vec3(1 / GAMMA));\n",
                 "shaders/lib/config.glsl": "#define DYN_HAND_LIGHT\n",
@@ -73,8 +85,16 @@ class FastRgbTests(unittest.TestCase):
                 self.assertNotIn("E-Lite-archive/shaders/shaders.properties", z.namelist())
                 self.assertIn("26100", z.read("shaders/lib/messy_fast_lights.glsl").decode())
                 self.assertIn("MESSY_TONE", z.read("shaders/lib/config.glsl").decode())
-                self.assertIn("no multi-source RGB propagation",
-                              z.read("MESSYSHADERS_BUILD.json").decode())
+                self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
+                self.assertIn("image.messyEmitVolume",
+                              z.read("shaders/shaders.properties").decode())
+                self.assertIn("imageAtomicMax",
+                              z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
+                self.assertIn("texture3D(messyRgbASampler",
+                              z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                self.assertEqual(len([x for x in z.namelist()
+                                      if x.startswith("shaders/world0/prepare")
+                                      and x.endswith(".csh")]), 7)
                 self.assertEqual(json.loads(z.read("MESSYSHADERS_BUILD.json"))["euphoria_mit_catalog"], False)
 
 if __name__ == "__main__":
