@@ -121,7 +121,7 @@ void messyWriteDynamicVoxel(vec3 worldRelative) {{
     # Shadow entity rendering costs CPU/GPU work; tie it to the new toggle.
     properties_path = "shaders/shaders.properties"
     patch_one(files, properties_path, "#ifdef SHADOW_ENTITIES\n    shadowEntities = true",
-              "#if defined SHADOW_ENTITIES || defined MESSY_DYNAMIC_EMITTERS)\n    shadowEntities = true")
+              "#if defined(SHADOW_ENTITIES) || defined(MESSY_DYNAMIC_EMITTERS)\n    shadowEntities = true")
     return {"enabled_by_default": True,
             "source": "Iris currentRenderedItemId + entityId in shadow pass",
             "categories": list(ENTITY_COLORS),
