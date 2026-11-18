@@ -41,6 +41,13 @@ jobs:
                   assert key in z.namelist(), key
           print('Pack structure valid (not a GLSL compile or GPU benchmark).')
           PY
+      - name: GLSL compile check for RGB compute passes
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq glslang-tools
+          mkdir -p /tmp/messy-shaders-check
+          unzip -q dist/MessyShaders-RGB-experimental.zip -d /tmp/messy-shaders-check
+          find /tmp/messy-shaders-check/shaders -name 'prepare*.csh' -print0 | xargs -0 -n 1 glslangValidator -S comp
       - name: Upload experimental pack and build report
         uses: actions/upload-artifact@v4
         with:
