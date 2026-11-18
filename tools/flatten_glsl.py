@@ -32,14 +32,32 @@ def main():
     with ZipFile(args.archive) as z:
         files = {n: z.read(n) for n in z.namelist() if n.startswith("shaders/") and not n.endswith("/")}
     args.output.mkdir(parents=True, exist_ok=True)
-    checks = ["shaders/world0/shadow.vsh", "shaders/world0/shadow.fsh"]
+    # Include gbuffers passes as well as the compute/shadow stages. The
+    # normalizeLuma error happened in textured.vsh, which the old CI missed.
+    checks = [
+        "shaders/world0/shadow.vsh",
+        "shaders/world0/shadow.fsh",
+        "shaders/world0/gbuffers_textured.vsh",
+        "shaders/world0/gbuffers_terrain.vsh",
+        "shaders/world0/gbuffers_entities.vsh",
+        "shaders/world0/gbuffers_block.vsh",
+        "shaders/world0/gbuffers_hand.vsh",
+    ]
     for name in checks:
         text = flatten(name, files)
-        if not text.startswith("#version 430 compatibility"):
-            raise RuntimeError(f"Not GLSL 430 compatibility: {name}")
-        text = text.replace("#version 430 compatibility",
-             "#version 430 compatibility\n#define IS_IRIS 1\n#define MC_VERSION 12101", 1)
-        dest = args.output / ("world0_shadow." + ("vert" if name.endswith(".vsh") else "frag"))
+        match = re.match(r"#version\\s+(120|430 compatibility)", text)
+        if not match:
+            raise RuntimeError(f"Unexpected shader version in {name}")
+        # Offline validator needs a high-enough *compatibility* profile to
+        # accept existing E-Lite attributes and the experimental GL4 images.
+        # Do not modify the actual ZIP's GLSL version here.
+        text = text[:match.start()] + (
+            "#version 430 compatibility\\n#define IS_IRIS 1\\n"
+            "#define MC_VERSION 12101"
+        ) + text[match.end():]
+        stage = "vert" if name.endswith(".vsh") else "frag"
+        ident = Path(name).stem.replace("gbuffers_", "")
+        dest = args.output / f"world0_{ident}.{stage}"
         dest.write_text(text, encoding="utf-8")
         print(f"{name} -> {dest}")
 
