@@ -172,6 +172,13 @@ def fix_normals(pack:dict[str,bytes])->dict:
                 dot(messyN - messyFlatN, messyLightDir), -0.35, 0.35);
             messyRGB *= (1.0 + 0.35 * messySurfaceRelief);
         #endif""","")
+    # E-Lite 5.1.3 left gloss undefined on non-reflective block types.
+    # NVIDIA specifically reports it as potentially uninitialized in the
+    # user's run. Random undefined specular values could amplify normal
+    # artifacts and should never enter computeRealLight.
+    replace_one(pack,path,
+                "        vec3 gloss;\\n        if(block_type != 1.0){",
+                "        vec3 gloss = vec3(0.0);\\n        if(block_type != 1.0){")
     return {"visual_shading":"generated normal changes direct-lit RGB by at most 12% while preserving ambient brightness",
             "extra_texture_reads":0,
             "removed_camera_fixed_fake_direction":True,
