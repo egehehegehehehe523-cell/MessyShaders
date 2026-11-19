@@ -165,7 +165,7 @@ def add_voxy(pack:dict[str,bytes])->dict:
     vec3 messyWaterRGB = messyAppliedRGB(messyWaterUVW, frameCounter) * 1.2;""")
     water_body=pack[water].decode("utf-8")
     water_body,count=re.subn(
-        r"(?m)^([ \\t]*)candleColor;", 
+        r"(?m)^([ \t]*)candleColor;", 
         lambda match: match.group(1)+"candleColor + messyWaterRGB;",
         water_body)
     if count != 3:
