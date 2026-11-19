@@ -112,6 +112,11 @@ class FastRgbTests(unittest.TestCase):
                     '            float isMetal = 0.0;\n'
                     '            f0_val = reflex_index2;\n'
                     '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
+                "shaders/common/solid_voxy_blocks_fragment.glsl":
+                    '#include "/lib/luma.glsl"\n'
+                    '    blockColor.rgb *= mix(realLight, vec3(1.0), nightVision * 0.125);\n',
+                "shaders/common/voxy.json":
+                    '"frameTimeCounter",\n"noisetex": "sampler2D",\n',
                 "shaders/entity.properties": "entity.10101=minecraft:lightning_bolt\n",
                 "shaders/common/shadow_vertex.glsl":
                     'attribute vec4 mc_Entity;\n    worldPos = positions.xyz;\n',
@@ -176,11 +181,24 @@ class FastRgbTests(unittest.TestCase):
                               z.read("shaders/shaders.properties").decode())
                 self.assertIn("imageAtomicMax",
                               z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
-                self.assertIn("texture3D(messyRgbASampler",
+                self.assertIn("messyAppliedRGB(messyLightUVW, frameCounter)",
                               z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                self.assertIn("messyDiffuseFactor",
+                              z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                self.assertIn("image.messyRgbHistoryA", z.read("shaders/shaders.properties").decode())
+                self.assertIn("image.messyRgbHistoryB", z.read("shaders/shaders.properties").decode())
+                self.assertIn("vec3 oldLight", z.read("shaders/world0/prepare_g.csh").decode())
+                self.assertIn("messyRgbHistoryASampler",
+                              z.read("shaders/common/voxy.json").decode())
+                self.assertIn("messyAppliedRGB(messyVoxyUVW, frameCounter)",
+                              z.read("shaders/common/solid_voxy_blocks_fragment.glsl").decode())
+                self.assertIn("clrwl_computeFragment", z.read("shaders/clrwl_gbuffers.fsh").decode())
+                self.assertIn("clrwl_computeFragment", z.read("shaders/clrwl_shadow.fsh").decode())
+                self.assertIn("oit.gbuffers.colortex1 = 0",
+                              z.read("shaders/colorwheel.properties").decode())
                 self.assertEqual(len([x for x in z.namelist()
                                       if x.startswith("shaders/world0/prepare")
-                                      and x.endswith(".csh")]), 7)
+                                      and x.endswith(".csh")]), 8)
                 self.assertEqual(json.loads(z.read("MESSYSHADERS_BUILD.json"))["euphoria_mit_catalog"], False)
 
 if __name__ == "__main__":
