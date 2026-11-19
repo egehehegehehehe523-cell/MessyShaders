@@ -191,8 +191,8 @@ def coated_textures(pack: dict[str, bytes]):
 
     props="shaders/shaders.properties"
     replace_once(pack,props,
-        "MESSY_IPBR_RELIEF_DEPTH <empty> PERF_IMPACT",
-        "MESSY_IPBR_RELIEF_DEPTH MESSY_COATED_TEXTURES MESSY_COAT_STRENGTH PERF_IMPACT")
+        "MESSY_IPBR_NORMAL_STRENGTH <empty> PERF_IMPACT",
+        "MESSY_IPBR_NORMAL_STRENGTH MESSY_COATED_TEXTURES MESSY_COAT_STRENGTH <empty> PERF_IMPACT")
 
     # Existing English translations are complemented, not overwritten.
     lang="shaders/lang/en_US.lang"
@@ -202,9 +202,7 @@ def coated_textures(pack: dict[str, bytes]):
         "screen.MESSY_FEATURES":"Messy Features",
         "option.MESSY_DYNAMIC_EMITTERS":"Moving Coloured Lights",
         "option.MESSY_IPBR":"Generated PBR",
-        "option.MESSY_IPBR_NORMAL_STRENGTH":"Normal Map Strength",
-        "option.MESSY_IPBR_RELIEF":"Raised Texture Depth",
-        "option.MESSY_IPBR_RELIEF_DEPTH":"Relief Depth",
+        "option.MESSY_IPBR_NORMAL_STRENGTH":"Generated Normal Strength",
         "option.MESSY_COATED_TEXTURES":"Coated Textures",
         "option.MESSY_COAT_STRENGTH":"Coating Strength",
     }.items():
