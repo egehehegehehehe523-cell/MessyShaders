@@ -303,6 +303,18 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_coverage_coating import patch_full_coverage_coating
     report["coverage_coating"] = patch_full_coverage_coating(payload, euphoria_root)
+    # Use one temporal RGB image pair for all three render paths, and
+    # expose native Voxy/Colorwheel bridges in the same shader archive.
+    try:
+        from .patch_temporal_compat import apply_temporal_normals
+    except ImportError:
+        from patch_temporal_compat import apply_temporal_normals
+    report["temporal_normals"] = apply_temporal_normals(payload)
+    try:
+        from .patch_render_compat import apply_render_compat
+    except ImportError:
+        from patch_render_compat import apply_render_compat
+    report["render_compatibility"] = apply_render_compat(payload)
     report["limitations"] = [
         "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
         "Approximate voxel occlusion; thin/translucent block correctness pending",
