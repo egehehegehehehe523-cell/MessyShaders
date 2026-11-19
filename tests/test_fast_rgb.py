@@ -32,11 +32,27 @@ class FastRgbTests(unittest.TestCase):
 
     def test_rgb_propagation_range_keeps_six_dispatches_and_checks_walls(self):
         self.assertEqual(len(PROPAGATION_STRIDES), 6)
-        self.assertEqual(sum(PROPAGATION_STRIDES), 10)
-        code = diffusion_source("messyRgbA", "messyRgbB", 2)
-        self.assertIn("const int messyStride = 2;", code)
-        self.assertIn("p + offset / 2", code)
+        self.assertEqual(sum(PROPAGATION_STRIDES), 14)
+        code = diffusion_source("messyRgbA", "messyRgbB", 4)
+        self.assertIn("const int messyStride = 4;", code)
+        self.assertIn("stepIndex < messyStride", code)
+        self.assertIn("p + direction * stepIndex", code)
+        self.assertIn("layout(rgba8)", code)
         self.assertIn("imageLoad(messyOpaqueVolume", code)
+        # Near light must stay dense after coarsening the far strides:
+        # sparse/periodic propagation holes would look like a hard cutoff.
+        active = {(0, 0, 0)}
+        directions = ((1, 0, 0), (-1, 0, 0), (0, 1, 0),
+                      (0, -1, 0), (0, 0, 1), (0, 0, -1))
+        for stride in PROPAGATION_STRIDES:
+            active |= {(x + dx * stride, y + dy * stride, z + dz * stride)
+                       for x, y, z in active for dx, dy, dz in directions}
+        near = {(x, y, z)
+                for x in range(-14, 15)
+                for y in range(-14, 15)
+                for z in range(-14, 15)
+                if abs(x) + abs(y) + abs(z) <= 14}
+        self.assertGreater(len(active & near) / len(near), 0.98)
 
     def test_multiline_properties(self):
         table = parse_properties("block.21004 = mod:red_lamp \\\n mod:red_torch \\\n mod:red_candle\n# comment\nblock.22 = dirt\n")
@@ -320,16 +336,16 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("vec2 sampleStep = max(vec2(nominalStep), uvFootprint);", auto_lib)
                 self.assertIn("middle - length(texture2D(albedo, rightUV).rgb)", auto_lib)
                 self.assertIn("float messyAutoSkyRelief(", auto_lib)
-                self.assertIn("distanceToCamera > 56.0", auto_lib)
+                self.assertIn("distanceToCamera > float(MESSY_AUTO_NORMAL_DISTANCE)", auto_lib)
                 self.assertIn("rainWetness * (0.12 + 0.06 * polished)", auto_lib)
                 self.assertIn("Automatic Block Materials", z.read("shaders/lang/en_US.lang").decode())
                 self.assertIn("Visualize Normal Relief", z.read("shaders/lang/en_US.lang").decode())
                 self.assertIn("blue means flat or missing normals", z.read("shaders/lang/en_US.lang").decode())
                 props = z.read("shaders/shaders.properties").decode()
                 self.assertIn("MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH", props)
-                self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DEBUG", props)
+                self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DISTANCE MESSY_AUTO_NORMAL_DEBUG", props)
                 self.assertNotIn("MESSY_AUTO_PARALLAX_DEPTH", props)
-                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION ", props)
+                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DISTANCE ", props)
                 self.assertFalse(info["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"])
                 self.assertFalse(info["native_auto_materials"]["water_lod_changes"])
                 self.assertFalse(info["lod_shading"]["water_depth_refraction_formula_changed"])
@@ -360,6 +376,10 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("#if !defined(VOXY_BLOCK) && !defined(VOXY_WATER)", rgb_lib)
                 self.assertIn("return texture(sourceField, uv).rgb;", rgb_lib)
                 self.assertIn("return texture3D(sourceField, uv).rgb;", rgb_lib)
+                self.assertIn("float volumeEdgeFade = smoothstep(0.75, 4.0, minEdgeCells);", rgb_lib)
+                self.assertIn("float gentleCutoff = smoothstep(0.022, 0.10, energy);", rgb_lib)
+                self.assertIn("rgba rgba8 float false false 48 48 48", props)
+                self.assertEqual(json.loads(z.read("MESSYSHADERS_BUILD.json"))["world_rgb"]["max_propagation_reach"], 14)
                 lite_meta = z.read("shaders/common/voxy.json").decode()
                 self.assertIn("#if MC_VERSION >= 12109", lite_meta)
                 self.assertIn("messyLiteGlossWeight",

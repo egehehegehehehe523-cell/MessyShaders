@@ -2,8 +2,9 @@
 
 Experimental: re-voxelizes the nearby 48^3 area during the existing shadow
 pass, then performs six low-resolution 6-neighbour propagation steps before
-the gbuffers render. Two near steps and four guarded two-block steps expand
-the usable footprint to about ten blocks without adding dispatches.
+the gbuffers render. Variable guarded jumps cover roughly fourteen blocks
+without adding dispatches. The RGB images use normalized 8-bit storage;
+the source palette and propagated intensities are bounded to [0, 1].
 This gives placed block light surface spill and basic blocking by full blocks,
 but it is NOT cached, physically exact or GPU benchmarked.
 
@@ -15,9 +16,10 @@ from typing import Any
 
 SIZE = 48
 STEPS = 6
-# Small jumps expand the reach in the same six dispatches. Check the middle
-# voxel of each two-block jump so a solid one-block wall cannot be skipped.
-PROPAGATION_STRIDES = (1, 1, 2, 2, 2, 2)
+# Retain one-voxel coverage at the source, then use multi-scale jumps.
+# This covers >98% of the 14-block Manhattan ball in six passes; every
+# intermediate voxel must be tested so a 3/4-cell jump cannot cross a wall.
+PROPAGATION_STRIDES = (1, 1, 2, 3, 3, 4)
 assert len(PROPAGATION_STRIDES) == STEPS
 COLORS = [
     (1.00, 0.98, 0.93),  # white
@@ -89,7 +91,7 @@ def seed_source() -> str:
         "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;",
         "const ivec3 workGroups = ivec3(6, 6, 48);",
         "layout(r32ui) uniform readonly uimage3D messyEmitVolume;",
-        "layout(rgba16f) uniform writeonly image3D messyRgbA;",
+        "layout(rgba8) uniform writeonly image3D messyRgbA;",
         "vec3 messyPalette(uint id) {",
     ]
     for i, c in enumerate(COLORS, 1):
@@ -118,8 +120,8 @@ def diffusion_source(input_field: str, output_field: str, stride: int) -> str:
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 const ivec3 workGroups = ivec3(6, 6, 48);
 const int messyStride = {stride};
-layout(rgba16f) uniform readonly image3D {input_field};
-layout(rgba16f) uniform writeonly image3D {output_field};
+layout(rgba8) uniform readonly image3D {input_field};
+layout(rgba8) uniform writeonly image3D {output_field};
 layout(r32ui) uniform readonly uimage3D messyOpaqueVolume;
 
 vec3 sampleFrom(ivec3 p) {{
@@ -132,10 +134,15 @@ vec3 sampleThrough(ivec3 p, ivec3 offset) {{
     ivec3 target = p + offset;
     if (any(lessThan(target, ivec3(0))) ||
         any(greaterThanEqual(target, ivec3(48)))) return vec3(0.0);
-    if (messyStride > 1 &&
-        imageLoad(messyOpaqueVolume, p + offset / 2).r != 0u)
-        return vec3(0.0);
-    return sampleFrom(target);
+    vec3 candidate = sampleFrom(target);
+    // Most volume cells are dark. Avoid occupancy reads on those paths.
+    if (all(lessThanEqual(candidate, vec3(0.0)))) return candidate;
+    ivec3 direction = offset / messyStride;
+    for (int stepIndex = 1; stepIndex < messyStride; ++stepIndex) {{
+        if (imageLoad(messyOpaqueVolume, p + direction * stepIndex).r != 0u)
+            return vec3(0.0);
+    }}
+    return candidate;
 }}
 
 void main() {{
@@ -222,14 +229,15 @@ def apply_world_rgb(pack: dict[str, bytes]) -> dict[str, Any]:
     if "image.messyEmitVolume" in current:
         raise ValueError("RGB volume has already been added")
     # Iris supports 3-D custom images, RED_INTEGER/R32UI atomic writes and
-    # compute passes before gbuffers. Keep format size small (48^3).
+    # compute passes before gbuffers. RGBA8 halves light field bandwidth
+    # relative to RGBA16F; channel values never exceed one before lighting.
     props = """
 # MessyShaders bounded first-generation RGB world lighting.
 iris.features.required = CUSTOM_IMAGES COMPUTE_SHADERS
 image.messyEmitVolume = messyEmitSampler red_integer r32ui unsigned_int true false 48 48 48
 image.messyOpaqueVolume = messyOpaqueSampler red_integer r32ui unsigned_int true false 48 48 48
-image.messyRgbA = messyRgbASampler rgba rgba16f float true false 48 48 48
-image.messyRgbB = messyRgbBSampler rgba rgba16f float true false 48 48 48
+image.messyRgbA = messyRgbASampler rgba rgba8 float true false 48 48 48
+image.messyRgbB = messyRgbBSampler rgba rgba8 float true false 48 48 48
 """
     pack[properties] = (current.rstrip() + "\n" + props).encode("utf-8")
     put(pack, "shaders/lib/messy_voxel_vertex.glsl", shadow_vertex_source())
@@ -245,12 +253,13 @@ image.messyRgbB = messyRgbBSampler rgba rgba16f float true false 48 48 48
             put(pack, f"{prefix}_{suffix}.csh",
                 diffusion_source(source_field, target_field, PROPAGATION_STRIDES[index]))
     return {
-        "mode": "Iris 48^3 voxel emission + 6 passes, guarded 10-block propagation reach",
+        "mode": "Iris 48^3 voxel emission + 6 passes, guarded 14-block propagation reach, RGBA8",
         "max_propagation_reach": sum(PROPAGATION_STRIDES),
         "gpu_measured": False,
         "irradiance_occlusion": "basic block-based voxel occupancy; not per-face exact",
         "frame_cache": False,
         "supports_placed_block_light_spill": True,
         "supports_independent_coloured_dynamic_entities": False,
-        "texture_bytes_approx": SIZE ** 3 * (4 + 4 + 8 + 8),
+        "texture_bytes_approx": SIZE ** 3 * (4 + 4 + 4 + 4),
+        "light_storage": "RGBA8 normalized; bounded [0,1] RGB sources",
     }

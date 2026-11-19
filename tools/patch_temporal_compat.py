@@ -1,7 +1,7 @@
 """Temporal RGB reprojection and actual generated-normal surface shading.
 
 We preserve the existing 48^3 light propagation and blend its result through
-two persistent 3-D history volumes. No Voxy/Minecraft/Colorwheel mixins.
+two persistent, compact RGBA8 3-D history volumes. No Voxy/Minecraft/Colorwheel mixins.
 Reference strategy: reprojection and bounded temporal persistence; all code
 is independently authored. Blender accepts fresh light immediately and
 decreases stale light over several frames to avoid voxel-step popping.
@@ -22,10 +22,10 @@ def temporal_compute()->str:
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 const ivec3 workGroups = ivec3(6, 6, 48);
 // Current fully propagated lighting from the existing six iterations.
-layout(rgba16f) uniform readonly image3D messyRgbA;
+layout(rgba8) uniform readonly image3D messyRgbA;
 // Two NON-clearing history images. Never read and write the same one.
-layout(rgba16f) uniform image3D messyRgbHistoryA;
-layout(rgba16f) uniform image3D messyRgbHistoryB;
+layout(rgba8) uniform image3D messyRgbHistoryA;
+layout(rgba8) uniform image3D messyRgbHistoryB;
 uniform int frameCounter;
 uniform vec3 cameraPosition;
 uniform vec3 previousCameraPosition;
@@ -90,7 +90,15 @@ vec3 messySampleHistory(vec3 uv, int frameIndex) {
 vec3 messyAppliedRGB(vec3 uv, int frameIndex) {
     vec3 rgb = max(messySampleHistory(uv, frameIndex), vec3(0.0));
     float energy = max(rgb.r, max(rgb.g, rgb.b));
-    return rgb * smoothstep(0.045, 0.15, energy);
+    // Soft attenuation keeps the new 11-14 block propagation visible without
+    // sharply discarding weak color at the old ten-block boundary.
+    float gentleCutoff = smoothstep(0.022, 0.10, energy);
+    // The camera-centred volume must not terminate in a luminous square.
+    // Fade the outer four voxel cells; all renderers share this mask.
+    vec3 edgeCells = min(uv, vec3(1.0) - uv) * 48.0;
+    float minEdgeCells = min(edgeCells.x, min(edgeCells.y, edgeCells.z));
+    float volumeEdgeFade = smoothstep(0.75, 4.0, minEdgeCells);
+    return rgb * gentleCutoff * volumeEdgeFade;
 }
 """
 
@@ -99,8 +107,8 @@ def add_temporal(pack:dict[str,bytes])->dict:
     text=pack[properties].decode("utf-8")
     if "image.messyRgbHistoryA" in text: raise ValueError("Temporal images already exist")
     text+="""\n# Non-clearing temporal RGB volumes (two images, no read/write race).
-image.messyRgbHistoryA = messyRgbHistoryASampler rgba rgba16f float false false 48 48 48
-image.messyRgbHistoryB = messyRgbHistoryBSampler rgba rgba16f float false false 48 48 48
+image.messyRgbHistoryA = messyRgbHistoryASampler rgba rgba8 float false false 48 48 48
+image.messyRgbHistoryB = messyRgbHistoryBSampler rgba rgba8 float false false 48 48 48
 """
     pack[properties]=text.encode("utf-8")
     lib="shaders/lib/messy_rgb_sample.glsl"
@@ -123,10 +131,10 @@ image.messyRgbHistoryB = messyRgbHistoryBSampler rgba rgba16f float false false 
         float messyEnergy = max(messyRGB.r, max(messyRGB.g, messyRGB.b));
         messyRGB *= smoothstep(0.045, 0.15, messyEnergy);
 """, "")
-    return {"technique":"camera-cell reprojection; dual persistent 48^3 history images",
+    return {"technique":"camera-cell reprojection; dual persistent 48^3 RGBA8 history images",
             "current_passes":8,
             "additional_compute_passes":1,
-            "additional_vram_bytes":2*SIZE**3*8,
+            "additional_vram_bytes":2*SIZE**3*4,
             "measured_gpu_cost":False,
             "notes":["Fast onset/short decay; not true subvoxel positions",
                      "Camera displacements above three blocks discard history",

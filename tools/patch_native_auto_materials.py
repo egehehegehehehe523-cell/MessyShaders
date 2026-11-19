@@ -26,7 +26,9 @@ vec3 messyAutoBumpedNormal(sampler2D albedo, vec2 uv, vec3 baseColor,
     // Preserve existing UVs. This samples on either side of texel borders,
     // so relief appears as fine beveled edges instead of blocky color blobs.
     float footprint = max(uvFootprint.x, uvFootprint.y);
-    if (distanceToCamera > 56.0 || footprint >= 1.25 ||
+    // Four additional atlas fetches are the main near-terrain material cost.
+    // Let GPU-bound setups shorten that work radius without disabling normals.
+    if (distanceToCamera > float(MESSY_AUTO_NORMAL_DISTANCE) || footprint >= 1.25 ||
         MESSY_AUTO_NORMAL_STRENGTH <= 0.0) return flatNormal;
 
     vec2 texel = 1.0 / max(atlasPixels, vec2(16.0));
@@ -52,7 +54,9 @@ vec3 messyAutoBumpedNormal(sampler2D albedo, vec2 uv, vec3 baseColor,
 
     float confidence = smoothstep(0.025, 0.14, length(edge));
     float mipFade = 1.0 - smoothstep(0.65, 1.25, footprint);
-    float distanceFade = 1.0 - smoothstep(32.0, 56.0, distanceToCamera);
+    float distanceFade = 1.0 - smoothstep(
+        float(MESSY_AUTO_NORMAL_DISTANCE) * (4.0 / 7.0),
+        float(MESSY_AUTO_NORMAL_DISTANCE), distanceToCamera);
     detail = clamp(confidence * mipFade * distanceFade, 0.0, 1.0);
 
     float resolutionScale = sqrt(float(MESSY_AUTO_NORMAL_RESOLUTION) / 128.0);
@@ -357,19 +361,22 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                      "#define MESSY_AUTO_MATERIALS\n"
                      "#define MESSY_AUTO_NORMAL_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5 2.0]\n"
                      "#define MESSY_AUTO_NORMAL_RESOLUTION 512 // [128 256 512 1024]\n"
+                     "#define MESSY_AUTO_NORMAL_DISTANCE 56 // [24 32 40 48 56]\n"
                      "//#define MESSY_AUTO_NORMAL_DEBUG\n").encode()
     replace_one(pack, props,
                 "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS <empty> PERF_IMPACT",
-                "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DEBUG <empty> PERF_IMPACT")
+                "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DISTANCE MESSY_AUTO_NORMAL_DEBUG PERF_IMPACT")
     replace_one(pack, props,
                 "sliders = ",
-                "sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION ")
+                "sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DISTANCE ")
     pack[lang] += ("\noption.MESSY_AUTO_MATERIALS=Automatic Block Materials\n"
                    "option.MESSY_AUTO_MATERIALS.comment=Sprite-generated normals and roughness, including atlas sprites missing both LabPBR maps. Authored map pixels take priority.\n"
                    "option.MESSY_AUTO_NORMAL_STRENGTH=Automatic Normal Detail\n"
                    "option.MESSY_AUTO_NORMAL_STRENGTH.comment=Intensity of generated pixel-edge normals. 1.0 gives strong fine relief; zero keeps block faces flat.\n"
                    "option.MESSY_AUTO_NORMAL_RESOLUTION=Automatic Normal Resolution\n"
                    "option.MESSY_AUTO_NORMAL_RESOLUTION.comment=Sub-texel sample precision for raised-looking pixel edges. 512 is the intended detail; lower values soften it. No texture displacement.\n"
+                   "option.MESSY_AUTO_NORMAL_DISTANCE=Automatic Normal Distance\n"
+                   "option.MESSY_AUTO_NORMAL_DISTANCE.comment=How far four additional per-pixel texture samples are used. 56 preserves detail; 24-40 can noticeably reduce GPU load in terrain-heavy scenes.\n"
                    "option.MESSY_AUTO_NORMAL_DEBUG=Visualize Normal Relief\n"
                    "option.MESSY_AUTO_NORMAL_DEBUG.comment=Diagnostic mode: blue means flat or missing normals; brighter yellow means more relief. Turn off after testing.\n").encode()
     return {
@@ -381,6 +388,7 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
         "weather_response": "lightly lower roughness for wet stone/polished IDs; no new texture reads",
         "labpbr_precedence": "autofallback only when normal atlas pixel is neutral and specular atlas pixel is zero",
         "texture_reads": "up to four sprite-local normal probes near the camera; two map probes in LabPBR mode",
+        "normal_sample_distance": "configurable 24-56 blocks; default 56 retains prior appearance",
         "water_lod_changes": False,
         "limits": "not actual per-texture LabPBR files; deliberately flat/black authored pixels indistinguishable from absent maps",
     }
