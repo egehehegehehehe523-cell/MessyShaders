@@ -12,6 +12,18 @@ Supplied comparison archives:
 
 See [the fast-path audit](docs/FAST_PATH_AUDIT.md).
 
+## Temporal RGB, generated normals, Colorwheel + Voxy (November 19 update)
+
+**Temporally stable dynamic coloured lights:** the original 48³ source/occupancy volumes and six diffusion iterations remain. A seventh compute stage (`prepare_g.csh`) reprojections previous RGB illumination using integer camera movement. Two persistent RGBA16F history volumes alternate reads and writes. New light appears immediately; disappearing/moving lights fade more smoothly rather than resetting entirely. Increased memory: ~1.77 MiB plus a single 48³ compute pass. This is a modest temporal filter, not Complementary's full ACT implementation, and **GPU timings have not been measured**.
+
+**Generated Normal Strength now changes diffuse illumination:** computed atlas normals feed the visible surface lighting directly on all terrain/block material paths even without high-quality reflections. Sun and moon directions come from their existing view-space uniforms, and the effect remains zero at strength 0. Prior UV-shift/parallax code is still removed. Coated Textures remains a separate inexpensive procedural detail control. If you enable authored LabPBR maps, their normals take precedence over generated normals.
+
+**Native Colorwheel support:** `clrwl_gbuffers.vsh/.fsh`, `clrwl_shadow.vsh/.fsh`, and `colorwheel.properties` are bundled with the shader. Colorwheel material processing uses `clrwl_computeFragment`; one OIT coefficient buffer corresponds to E-Lite's actual scene target `colortex1`. The render program consumes the **same temporally filtered RGB field** as vanilla terrain and can classify eligible Create/Flywheel shadow geometry as light sources. You should not need to merge another shader ZIP for the program files, though rendering correctness must be tested with your actual Colorwheel build. Verify `/flywheel backend` reports `colorwheel:instancing`.
+
+**Native Voxy support retained:** existing Voxy geometry shaders, shadows, fog, depth handling, JSON layouts and native texture shading are preserved. Opaque **and translucent** Voxy fragments can sample the same RGB history inside the nearby 48³ field; Voxy LOD lighting beyond that field is unchanged. The shader adds two sampler declarations and `frameCounter` to E-Lite's shared `voxy.json`. It does **not** mix into Neo-Voxy, Voxy, Iris or Minecraft, allocate distant RGB voxels, change queue/RAM defaults, or claim all LOD chunks have propagated RGB light.
+
+**Validation:** GitHub Actions tests the generated ZIP and compiles normal G-buffer, Colorwheel wrapper (offline mock for Colorwheel's injected material callback), shadow and compute shader stages. These checks cannot reproduce your full Iris + Neo-Voxy + Colorwheel runtime or measure GPU frame times. Please check shadow/lighting alignment on rotating Create contraptions, moving XP orbs, stone normals at different sun angles, and the Voxy near/far seam. This branch remains experimental.
+
 ## Expanded Euphoria light coverage and raised/coated textures
 
 The latest experimental ZIP adds a controlled import from the **Euphoria Patches MIT entity classification data**. The pinned catalogue currently contributes 230 modded entity candidates across 20 eligible lighting groups, while retaining E-Lite's original IDs. Additional classified vanilla categories include allay, vex, experience orb, enderman, drowned, stray, trident, bogged, creaking, parched, zombie nautilus, spectral arrow, eye of ender, and the **entity-flame renderer**. It can also treat a dropped item rendered using one of our classified block IDs as a light.
