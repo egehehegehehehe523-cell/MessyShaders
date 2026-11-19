@@ -131,7 +131,9 @@ def fix_normals(pack:dict[str,bytes])->dict:
         // Both sunPosition and the normal vectors are in view space.
         // The difference from the original face normal ensures that 0
         // strength exactly preserves E-Lite base brightness.
-        vec3 messyLightDirection = normalize(mix(-sunPosition, sunPosition, light_mix));
+        // Avoid normalizing a zero vector at the day/night midpoint.
+        vec3 messyLightDirection =
+            normalize(light_mix >= 0.5 ? sunPosition : moonPosition);
         vec3 messyN = normalize(bumpedNormal);
         vec3 messyBaseN = normalize(flat_normal);
         float messyNdotDifference =
