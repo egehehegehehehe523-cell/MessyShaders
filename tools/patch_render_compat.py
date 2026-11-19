@@ -66,6 +66,7 @@ COLORWHEEL_SHADOW_VERTEX = """#version 430 compatibility
 // Colorwheel shadow + emission capture; no independent Voxy/Minecraft hook.
 uniform mat4 shadowModelViewInverse;
 uniform vec3 cameraPosition;
+attribute vec4 mc_Entity;
 layout(r32ui) uniform uimage3D messyEmitVolume;
 out vec2 messyTexcoord;
 void main() {
