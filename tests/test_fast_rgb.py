@@ -152,8 +152,12 @@ class FastRgbTests(unittest.TestCase):
                 self.assertNotIn("MESSY_IPBR_RELIEF", z.read("shaders/lib/config.glsl").decode())
                 self.assertIn("Generated Normal Strength", z.read("shaders/lang/en_US.lang").decode())
                 self.assertNotIn("Raised Texture Depth", z.read("shaders/lang/en_US.lang").decode())
-                self.assertIn("uint packed = imageLoad(messyEmitVolume, p).r",
-                              z.read("shaders/world0/prepare.csh").decode())
+                seed = z.read("shaders/world0/prepare.csh").decode()
+                self.assertIn("uint messyPackedVoxel = imageLoad(messyEmitVolume, p).r", seed)
+                self.assertIn("uint idx = messyPackedVoxel & 255u;", seed)
+                self.assertIn("(messyPackedVoxel >> 8u)", seed)
+                # 'packed' is a GLSL layout qualifier, not a safe variable.
+                self.assertNotRegex(seed, r"\\b(?:uint|int|float)\\s+packed\\b")
                 self.assertIn("tier = 2u;  // XP orbs",
                               z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
                 self.assertIn("(15u << 8u)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
