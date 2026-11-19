@@ -30,7 +30,7 @@ def main():
         lib = z.read("shaders/lib/messy_rgb_sample.glsl").decode("utf8")
         water = z.read("shaders/lib/water_voxy.glsl").decode("utf8")
         water_json = z.read("shaders/common/voxy.json").decode("utf8")
-        assert '"vxDepthTexOpaque": "sampler2D"' in water_json
+        assert '"vxDepthTexTrans": "sampler2D"' in water_json
         names = set(z.namelist())
         for dim in ("world0", "world-1", "world1", ""):
             prefix = f"shaders/{dim}/" if dim else "shaders/"
@@ -62,7 +62,7 @@ def main():
         "#define texture2D texture\n"
         "#define WATER_ABSORPTION 0.05\n"
         "#define WATER_TURBULENCE 0.8\n"
-        "uniform sampler2D vxDepthTexOpaque, gaux1, noisetex;\n"
+        "uniform sampler2D vxDepthTexTrans, gaux1, noisetex;\n"
         "uniform float pixelSizeX, pixelSizeY, frameTimeCounter, rainStrength;\n"
         "uniform int isEyeInWater;\n"
         + "\n".join(extract_function(water, signature) for signature in (

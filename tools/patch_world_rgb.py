@@ -1,10 +1,11 @@
 """Prototype bounded shader-only coloured *world* light through Iris custom images.
 
 Experimental: re-voxelizes the nearby 48^3 area during the existing shadow
-pass, then performs six low-resolution 6-neighbour diffusion steps before
-the gbuffers render.  This gives placed block light real surface spill and
-basic blocking by full blocks, at a finite cost. It is NOT cached, not
-Luxium's proprietary renderer, not physically based and not GPU benchmarked.
+pass, then performs six low-resolution 6-neighbour propagation steps before
+the gbuffers render. Two near steps and four guarded two-block steps expand
+the usable footprint to about ten blocks without adding dispatches.
+This gives placed block light surface spill and basic blocking by full blocks,
+but it is NOT cached, physically exact or GPU benchmarked.
 
 See docs/RENDERER_ARCHITECTURE.md for constraints and remaining work.
 """
@@ -14,6 +15,10 @@ from typing import Any
 
 SIZE = 48
 STEPS = 6
+# Small jumps expand the reach in the same six dispatches. Check the middle
+# voxel of each two-block jump so a solid one-block wall cannot be skipped.
+PROPAGATION_STRIDES = (1, 1, 2, 2, 2, 2)
+assert len(PROPAGATION_STRIDES) == STEPS
 COLORS = [
     (1.00, 0.98, 0.93),  # white
     (0.68, 0.34, 0.16),  # brown
@@ -105,12 +110,14 @@ def seed_source() -> str:
     return "\n".join(lines)
 
 
-def diffusion_source(input_field: str, output_field: str) -> str:
+def diffusion_source(input_field: str, output_field: str, stride: int) -> str:
     # All invocations only read previous-field values; each destination voxel
     # has a single writer per pass. No racing imageStore writes.
+    attenuation = 0.83 ** stride
     return f"""#version 430
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 const ivec3 workGroups = ivec3(6, 6, 48);
+const int messyStride = {stride};
 layout(rgba16f) uniform readonly image3D {input_field};
 layout(rgba16f) uniform writeonly image3D {output_field};
 layout(r32ui) uniform readonly uimage3D messyOpaqueVolume;
@@ -119,6 +126,16 @@ vec3 sampleFrom(ivec3 p) {{
     if (any(lessThan(p, ivec3(0))) || any(greaterThanEqual(p, ivec3(48))))
         return vec3(0.0);
     return imageLoad({input_field}, p).rgb;
+}}
+
+vec3 sampleThrough(ivec3 p, ivec3 offset) {{
+    ivec3 target = p + offset;
+    if (any(lessThan(target, ivec3(0))) ||
+        any(greaterThanEqual(target, ivec3(48)))) return vec3(0.0);
+    if (messyStride > 1 &&
+        imageLoad(messyOpaqueVolume, p + offset / 2).r != 0u)
+        return vec3(0.0);
+    return sampleFrom(target);
 }}
 
 void main() {{
@@ -131,11 +148,12 @@ void main() {{
         return;
     }}
     vec3 fromNearby = max(
-        max(sampleFrom(p + ivec3( 1, 0, 0)), sampleFrom(p + ivec3(-1, 0, 0))),
-        max(sampleFrom(p + ivec3( 0, 1, 0)), sampleFrom(p + ivec3( 0,-1, 0))));
-    fromNearby = max(fromNearby, sampleFrom(p + ivec3(0,0, 1)));
-    fromNearby = max(fromNearby, sampleFrom(p + ivec3(0,0,-1)));
-    imageStore({output_field}, p, vec4(max(center, fromNearby * 0.78), 1.0));
+        max(sampleThrough(p, ivec3( messyStride, 0, 0)), sampleThrough(p, ivec3(-messyStride, 0, 0))),
+        max(sampleThrough(p, ivec3(0, messyStride, 0)), sampleThrough(p, ivec3(0,-messyStride, 0))));
+    fromNearby = max(fromNearby, sampleThrough(p, ivec3(0,0, messyStride)));
+    fromNearby = max(fromNearby, sampleThrough(p, ivec3(0,0,-messyStride)));
+    // Attenuation depends on actual distance, not number of compute steps.
+    imageStore({output_field}, p, vec4(max(center, fromNearby * {attenuation:.6f}), 1.0));
 }}
 """
 
@@ -224,9 +242,11 @@ image.messyRgbB = messyRgbBSampler rgba rgba16f float true false 48 48 48
             suffix = chr(ord("a") + index)
             source_field = "messyRgbA" if index % 2 == 0 else "messyRgbB"
             target_field = "messyRgbB" if index % 2 == 0 else "messyRgbA"
-            put(pack, f"{prefix}_{suffix}.csh", diffusion_source(source_field, target_field))
+            put(pack, f"{prefix}_{suffix}.csh",
+                diffusion_source(source_field, target_field, PROPAGATION_STRIDES[index]))
     return {
-        "mode": "Iris camera-relative 48^3 voxel emission + 6 diffusion steps",
+        "mode": "Iris 48^3 voxel emission + 6 passes, guarded 10-block propagation reach",
+        "max_propagation_reach": sum(PROPAGATION_STRIDES),
         "gpu_measured": False,
         "irradiance_occlusion": "basic block-based voxel occupancy; not per-face exact",
         "frame_cache": False,

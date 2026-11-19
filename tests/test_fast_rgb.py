@@ -6,12 +6,28 @@ import unittest
 from zipfile import ZipFile
 
 from tools.patch_coverage_coating import parse_entities, expand_entities
+from tools.patch_world_rgb import PROPAGATION_STRIDES, diffusion_source
 from tools.build_fast_rgb import (
-    apply_overrides, build, emitter_entries, parse_properties,
+    SOURCE, read_source, apply_overrides, build, emitter_entries, parse_properties,
     rewrite_property_table, BLOCK_IDS, ITEM_IDS,
 )
 
 class FastRgbTests(unittest.TestCase):
+    def test_real_water_libraries_restored(self):
+        base = read_source(SOURCE)
+        generated = dict(base)
+        apply_overrides(generated, None)
+        for path in ("shaders/lib/water.glsl", "shaders/lib/water_voxy.glsl"):
+            self.assertEqual(generated[path], base[path], path)
+
+    def test_rgb_propagation_range_keeps_six_dispatches_and_checks_walls(self):
+        self.assertEqual(len(PROPAGATION_STRIDES), 6)
+        self.assertEqual(sum(PROPAGATION_STRIDES), 10)
+        code = diffusion_source("messyRgbA", "messyRgbB", 2)
+        self.assertIn("const int messyStride = 2;", code)
+        self.assertIn("p + offset / 2", code)
+        self.assertIn("imageLoad(messyOpaqueVolume", code)
+
     def test_multiline_properties(self):
         table = parse_properties("block.21004 = mod:red_lamp \\\n mod:red_torch \\\n mod:red_candle\n# comment\nblock.22 = dirt\n")
         self.assertEqual(table[21004], ["mod:red_lamp", "mod:red_torch", "mod:red_candle"])
@@ -208,6 +224,13 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("messyWriteDynamicVoxel", z.read("shaders/common/shadow_vertex.glsl").decode())
                 self.assertIn("MESSY_IPBR", z.read("shaders/lib/config.glsl").decode())
                 self.assertIn("messyGeneratedNormal", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                config = z.read("shaders/lib/config.glsl").decode()
+                self.assertIn("#undef MESSY_IPBR", config)
+                self.assertIn("#undef MESSY_COATED_TEXTURES", config)
+                self.assertIn("#ifndef MESSY_UNSAFE_MATERIAL_PREVIEW", config)
+                self.assertGreater(config.index("#undef MESSY_IPBR"),
+                                   config.index("// #define MESSY_IPBR"))
+                self.assertIn("max_propagation_reach", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("image.messyEmitVolume",
                               z.read("shaders/shaders.properties").decode())
@@ -247,11 +270,11 @@ class FastRgbTests(unittest.TestCase):
                               z.read("shaders/common/solid_voxy_blocks_fragment.glsl").decode())
                 water_voxy = z.read("shaders/common/water_voxy_blocks_fragment.glsl").decode()
                 self.assertIn("messyWaterRGB", water_voxy)
-                self.assertIn("messyFarWave", water_voxy)
-                self.assertIn("messyNearWave", z.read("shaders/common/water_blocks_fragment.glsl").decode())
-                self.assertIn("water_absortion *= water_absortion;",
-                              z.read("shaders/lib/water_voxy.glsl").decode())
-                self.assertIn("vxDepthTexOpaque", lite_meta)
+                self.assertNotIn("messyFarWave", water_voxy)
+                self.assertNotIn("messyNearWave", z.read("shaders/common/water_blocks_fragment.glsl").decode())
+                self.assertNotIn("water_absortion *= water_absortion;",
+                                 z.read("shaders/lib/water_voxy.glsl").decode())
+                self.assertNotIn("vxDepthTexOpaque", lite_meta)
                 self.assertIn("uniform.float.pale_garden = 0.0",
                               z.read("shaders/shaders.properties").decode())
                 self.assertIn("#ifdef MESSY_COATED_TEXTURES",
