@@ -60,7 +60,10 @@ void messyWriteVoxel(vec3 worldRelative, int blockId) {
         return;
 
     if (blockId >= 26000 && blockId <= 26012) {
-        imageAtomicMax(messyEmitVolume, voxel, uint(blockId - 25999));
+        // High byte = intensity tier (15/15 for placed full block emitters),
+        // low byte = palette index; enables compact category-scaled moving
+        // emitters without allocating a second RGB light volume.
+        imageAtomicMax(messyEmitVolume, voxel, (15u << 8u) | uint(blockId - 25999));
     } else if (blockId > 0 && blockId < 26000 &&
                blockId != int(ENTITY_LEAVES) &&
                blockId != int(ENTITY_WHITE_LEAVES) &&
@@ -92,8 +95,10 @@ def seed_source() -> str:
         "void main() {",
         "    ivec3 p = ivec3(gl_GlobalInvocationID);",
         "    if (any(greaterThanEqual(p, ivec3(48)))) return;",
-        "    uint idx = imageLoad(messyEmitVolume, p).r;",
-        "    imageStore(messyRgbA, p, vec4(messyPalette(idx), 1.0));",
+        "    uint packed = imageLoad(messyEmitVolume, p).r;",
+        "    uint idx = packed & 255u;",
+        "    float lightScale = float((packed >> 8u) & 255u) / 15.0;",
+        "    imageStore(messyRgbA, p, vec4(messyPalette(idx) * lightScale, 1.0));",
         "}",
         "",
     ]
@@ -183,6 +188,10 @@ def patch_gbuffers(pack: dict[str, bytes]) -> None:
     if (all(greaterThanEqual(messyLightUVW, vec3(0.0))) &&
         all(lessThan(messyLightUVW, vec3(1.0)))) {
         vec3 messyRGB = texture3D(messyRgbASampler, messyLightUVW).rgb;
+        // Weak emitters dissipate perceptually within ~1-3 cells, while
+        // full-strength placed lights retain their established footprint.
+        float messyEnergy = max(messyRGB.r, max(messyRGB.g, messyRGB.b));
+        messyRGB *= smoothstep(0.045, 0.15, messyEnergy);
         real_light += messyRGB * 1.2;
     }
 
