@@ -6,6 +6,7 @@ render programs, avoiding a second shader pack or competing patcher. Shader
 code is original, not copied from Complementary's restricted sources.
 """
 from __future__ import annotations
+import re
 
 def patch_once(pack,path,needle,sub):
     if path not in pack:raise ValueError(f"Missing shader program {path}")
@@ -163,10 +164,13 @@ def add_voxy(pack:dict[str,bytes])->dict:
     vec3 messyWaterUVW = (worldPos.xyz + fract(cameraPosition) + vec3(24.0)) / 48.0;
     vec3 messyWaterRGB = messyAppliedRGB(messyWaterUVW, frameCounter) * 1.2;""")
     water_body=pack[water].decode("utf-8")
-    count=water_body.count("                candleColor;")
+    water_body,count=re.subn(
+        r"(?m)^([ \\t]*)candleColor;", 
+        lambda match: match.group(1)+"candleColor + messyWaterRGB;",
+        water_body)
     if count != 3:
         raise ValueError("Unexpected E-Lite Voxy translucent light assignment count: "+str(count))
-    pack[water]=water_body.replace("                candleColor;", "                candleColor + messyWaterRGB;").encode("utf-8")
+    pack[water]=water_body.encode("utf-8")
     patch_once(pack,meta,'"frameTimeCounter",', '"frameTimeCounter",\n    "frameCounter",')
     patch_once(pack,meta,'"noisetex": "sampler2D",',
                '"noisetex": "sampler2D",\n'
