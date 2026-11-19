@@ -115,6 +115,12 @@ class FastRgbTests(unittest.TestCase):
                 "shaders/common/solid_voxy_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
                     '    blockColor.rgb *= mix(realLight, vec3(1.0), nightVision * 0.125);\n',
+                "shaders/common/water_voxy_blocks_fragment.glsl":
+                    '#include "/lib/luma.glsl"\n'
+                    '    vec4 worldPos = vxModelViewInv * viewSpacePos4D;\n'
+                    '    realLight = vec3(0.0) + candleColor;\n'
+                    '    realLight = vec3(0.0) + candleColor;\n'
+                    '    realLight = vec3(0.0) + candleColor;\n',
                 "shaders/common/voxy.json":
                     '"frameTimeCounter",\n"noisetex": "sampler2D",\n',
                 "shaders/entity.properties": "entity.10101=minecraft:lightning_bolt\n",
@@ -192,6 +198,9 @@ class FastRgbTests(unittest.TestCase):
                               z.read("shaders/common/voxy.json").decode())
                 self.assertIn("messyAppliedRGB(messyVoxyUVW, frameCounter)",
                               z.read("shaders/common/solid_voxy_blocks_fragment.glsl").decode())
+                water_voxy = z.read("shaders/common/water_voxy_blocks_fragment.glsl").decode()
+                self.assertIn("messyWaterRGB", water_voxy)
+                self.assertEqual(water_voxy.count("+ candleColor + messyWaterRGB;"), 3)
                 self.assertIn("clrwl_computeFragment", z.read("shaders/clrwl_gbuffers.fsh").decode())
                 self.assertIn("clrwl_computeFragment", z.read("shaders/clrwl_shadow.fsh").decode())
                 self.assertIn("oit.gbuffers.colortex1 = 0",
