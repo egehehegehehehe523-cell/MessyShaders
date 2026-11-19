@@ -157,7 +157,7 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("uint idx = messyPackedVoxel & 255u;", seed)
                 self.assertIn("(messyPackedVoxel >> 8u)", seed)
                 # 'packed' is a GLSL layout qualifier, not a safe variable.
-                self.assertNotRegex(seed, r"\\b(?:uint|int|float)\\s+packed\\b")
+                self.assertNotRegex(seed, r"\b(?:uint|int|float)\s+packed\b")
                 self.assertIn("tier = 2u;  // XP orbs",
                               z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
                 self.assertIn("(15u << 8u)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
