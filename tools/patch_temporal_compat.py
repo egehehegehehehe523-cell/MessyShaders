@@ -65,14 +65,27 @@ void main() {
 
 def sample_lib()->str:
     return """// Generated MessyShaders shared RGB sample: terrain, Colorwheel, Voxy.
+// Voxy generates uniforms from voxy.json. A second declaration here
+// conflicts with Neo-Voxy's combined fragment shader.
+#if !defined(VOXY_BLOCK) && !defined(VOXY_WATER)
 uniform sampler3D messyRgbHistoryASampler;
 uniform sampler3D messyRgbHistoryBSampler;
+#endif
+
+vec3 messyReadRGB(sampler3D sourceField, vec3 uv) {
+    // Neo-Voxy and Colorwheel compile modern GLSL without texture3D().
+#if defined(VOXY_BLOCK) || defined(VOXY_WATER) || defined(MESSY_COLORWHEEL)
+    return texture(sourceField, uv).rgb;
+#else
+    return texture3D(sourceField, uv).rgb;
+#endif
+}
 vec3 messySampleHistory(vec3 uv, int frameIndex) {
     if (any(lessThan(uv, vec3(0.0))) ||
         any(greaterThanEqual(uv, vec3(1.0)))) return vec3(0.0);
     return (frameIndex & 1) == 0
-        ? texture3D(messyRgbHistoryBSampler, uv).rgb
-        : texture3D(messyRgbHistoryASampler, uv).rgb;
+        ? messyReadRGB(messyRgbHistoryBSampler, uv)
+        : messyReadRGB(messyRgbHistoryASampler, uv);
 }
 vec3 messyAppliedRGB(vec3 uv, int frameIndex) {
     vec3 rgb = max(messySampleHistory(uv, frameIndex), vec3(0.0));
