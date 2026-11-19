@@ -141,17 +141,22 @@ def fix_normals(pack:dict[str,bytes])->dict:
     path="shaders/common/solid_blocks_fragment.glsl"
     anchor="    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);"
     shade="""    #if defined MESSY_IPBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
-        // Both sunPosition and the normal vectors are in view space.
-        // The difference from the original face normal ensures that 0
-        // strength exactly preserves E-Lite base brightness.
-        // Avoid normalizing a zero vector at the day/night midpoint.
-        vec3 messyLightDirection =
-            normalize(light_mix >= 0.5 ? sunPosition : moonPosition);
-        vec3 messyN = normalize(bumpedNormal);
-        vec3 messyBaseN = normalize(flat_normal);
-        float messyNdotDifference =
-            dot(messyN, messyLightDirection) - dot(messyBaseN, messyLightDirection);
-        float messyDiffuseFactor = clamp(1.0 + 2.15 * messyNdotDifference, 0.55, 1.55);
+        // Only influence the directional surface lighting. Multiplying
+        // ALL irradiance amplified per-pixel noise in ambient light, even at
+        // night, and created the previously reported wrong-looking blocks.
+        // Normals and sun/moon directions are both in view space.
+        vec3 messyLightDirection = normalize(
+            light_mix >= 0.5 ? sunPosition : moonPosition);
+        vec3 messyNormal = normalize(bumpedNormal);
+        vec3 messyOriginalNormal = normalize(flat_normal);
+        float messyNewDiffuse = max(0.0, dot(messyNormal, messyLightDirection));
+        float messyOriginalDiffuse = max(0.0, dot(messyOriginalNormal, messyLightDirection));
+        float messyDelta = clamp(messyNewDiffuse - messyOriginalDiffuse, -0.20, 0.20);
+        float messyDirectMask = clamp(visible_sky * max(0.0, directLight2), 0.0, 1.0);
+        // This limits the maximum light-level change to +/- 12 percent.
+        // Stronger "raised" relief requires actual authored height maps.
+        float messyDiffuseFactor = clamp(
+            1.0 + messyDelta * messyDirectMask * 0.60, 0.88, 1.12);
         real_light *= messyDiffuseFactor;
     #endif
 """
@@ -167,7 +172,7 @@ def fix_normals(pack:dict[str,bytes])->dict:
                 dot(messyN - messyFlatN, messyLightDir), -0.35, 0.35);
             messyRGB *= (1.0 + 0.35 * messySurfaceRelief);
         #endif""","")
-    return {"visual_shading":"generated normal perturbs real_light on every GBUFFER_TERRAIN/BLOCK fragment",
+    return {"visual_shading":"generated normal changes direct-lit RGB by at most 12% while preserving ambient brightness",
             "extra_texture_reads":0,
             "removed_camera_fixed_fake_direction":True,
             "labpbr_priority_retained":True}
