@@ -254,7 +254,7 @@ def add_procedural_ipbr(files: dict[str, bytes]) -> dict:
         "// Procedural PBR (also works on new modded atlas textures). \n"
         "// Two extra atlas samples/fragment; disables automatically for LabPBR. \n"
         "#define MESSY_IPBR\n"
-        "#define MESSY_IPBR_NORMAL_STRENGTH 2.5 // [0.0 1.0 1.5 2.5 4.0]\n"
+        "#define MESSY_IPBR_NORMAL_STRENGTH 1.0 // [0.0 0.5 1.0 1.5 2.5 4.0]\n"
 
         "#define MESSY_DYNAMIC_EMITTERS\n"
         + config).encode("utf-8")
