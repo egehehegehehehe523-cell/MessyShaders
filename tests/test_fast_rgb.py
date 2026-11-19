@@ -117,6 +117,7 @@ class FastRgbTests(unittest.TestCase):
                     '#include "/src/light_vertex.glsl"\n',
                 "shaders/common/solid_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
+                    '    vec3 spec_energy;\n'
                     'varying vec3 direct_light_color, candle_color, omni_light;\n'
                     '#if defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
                     '    #ifdef POM\n    #endif\n#endif\n'
@@ -149,6 +150,7 @@ class FastRgbTests(unittest.TestCase):
                     '    #else\n'
                     '        float shadow_c_relief = directLight2;\n'
                     '    #endif\n'
+                    '    // === Block reflection\n'
                     '            currentRoughness = squarePow(1.0 - smoothness);\n'
                     '            float final_gloss_power = glossParms.g;\n'
                     '            float block_luma2 = pow(block_luma * glossParms.b, glossParms.a);\n'
@@ -264,6 +266,7 @@ class FastRgbTests(unittest.TestCase):
                                    config.index("// #define MESSY_IPBR"))
                 self.assertIn("#define MESSY_AUTO_MATERIALS\n", config)
                 self.assertIn("#define MESSY_AUTO_NORMAL_STRENGTH 1.0", config)
+                self.assertIn("#define MESSY_AUTO_NORMAL_RESOLUTION 512", config)
                 # Match the conventional Iris commented-out boolean macro.
                 self.assertIn("//#define MESSY_AUTO_NORMAL_DEBUG\n", config)
                 self.assertGreater(config.index("#define MESSY_AUTO_MATERIALS"),
@@ -287,6 +290,13 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("(pixelLambert + 0.20) / (faceLambert + 0.20)", auto_lib)
                 self.assertIn("0.70, 1.30", auto_lib)
                 self.assertIn("smoothstep(0.58, 0.78, light_mix)", fragment)
+                self.assertIn("vec3 messyAutoOmni = omni_light;", fragment)
+                self.assertIn("messyAutoSkyRelief(flat_normal, bumpedNormal", fragment)
+                self.assertIn("messyUseAutoSky && light_mix > 0.58", fragment)
+                self.assertIn("computeRealLight(messyAutoOmni, direct_light_color", fragment)
+                self.assertNotIn("computeRealLight(omni_light, direct_light_color", fragment)
+                self.assertIn("vec3 spec_energy = vec3(0.0);", fragment)
+                self.assertNotIn("vec3 spec_energy;", fragment)
                 self.assertNotIn("normalize(mix(-sunPosition, sunPosition, light_mix))", fragment)
                 self.assertNotIn("MESSY_AUTO_PARALLAX_DEPTH", config)
                 self.assertNotIn("MESSY_AUTO_PARALLAX_DEPTH", fragment)
@@ -306,6 +316,10 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("texture2D(albedo, leftUV)", auto_lib)
                 self.assertIn("texture2D(albedo, upUV)", auto_lib)
                 self.assertIn("texture2D(albedo, downUV)", auto_lib)
+                self.assertIn("float nominalStep = 16.0 / float(MESSY_AUTO_NORMAL_RESOLUTION);", auto_lib)
+                self.assertIn("vec2 sampleStep = max(vec2(nominalStep), uvFootprint);", auto_lib)
+                self.assertIn("middle - length(texture2D(albedo, rightUV).rgb)", auto_lib)
+                self.assertIn("float messyAutoSkyRelief(", auto_lib)
                 self.assertIn("distanceToCamera > 56.0", auto_lib)
                 self.assertIn("rainWetness * (0.12 + 0.06 * polished)", auto_lib)
                 self.assertIn("Automatic Block Materials", z.read("shaders/lang/en_US.lang").decode())
@@ -313,9 +327,9 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("blue means flat or missing normals", z.read("shaders/lang/en_US.lang").decode())
                 props = z.read("shaders/shaders.properties").decode()
                 self.assertIn("MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH", props)
-                self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_DEBUG", props)
+                self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DEBUG", props)
                 self.assertNotIn("MESSY_AUTO_PARALLAX_DEPTH", props)
-                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH ", props)
+                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION ", props)
                 self.assertFalse(info["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"])
                 self.assertFalse(info["native_auto_materials"]["water_lod_changes"])
                 self.assertFalse(info["lod_shading"]["water_depth_refraction_formula_changed"])

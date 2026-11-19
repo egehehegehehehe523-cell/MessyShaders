@@ -23,34 +23,43 @@ vec3 messyAutoBumpedNormal(sampler2D albedo, vec2 uv, vec3 baseColor,
                            vec2 atlasPixels, vec2 uvFootprint,
                            float distanceToCamera, out float detail) {
     detail = 0.0;
-    // Distant or minified texture gradients shimmer. Skip extra fetches.
+    // Preserve existing UVs. This samples on either side of texel borders,
+    // so relief appears as fine beveled edges instead of blocky color blobs.
     float footprint = max(uvFootprint.x, uvFootprint.y);
-    if (distanceToCamera > 56.0 || footprint >= 1.8 ||
+    if (distanceToCamera > 56.0 || footprint >= 1.25 ||
         MESSY_AUTO_NORMAL_STRENGTH <= 0.0) return flatNormal;
 
     vec2 texel = 1.0 / max(atlasPixels, vec2(16.0));
-    vec2 rightUV = messyAutoSpriteUV(uv + vec2(texel.x, 0.0), sprite, texel);
-    vec2 leftUV = messyAutoSpriteUV(uv - vec2(texel.x, 0.0), sprite, texel);
-    vec2 downUV = messyAutoSpriteUV(uv + vec2(0.0, texel.y), sprite, texel);
-    vec2 upUV = messyAutoSpriteUV(uv - vec2(0.0, texel.y), sprite, texel);
-    const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
-    vec2 delta = vec2(
-        dot(texture2D(albedo, leftUV).rgb, luminosity) -
-        dot(texture2D(albedo, rightUV).rgb, luminosity),
-        dot(texture2D(albedo, upUV).rgb, luminosity) -
-        dot(texture2D(albedo, downUV).rgb, luminosity));
+    float nominalStep = 16.0 / float(MESSY_AUTO_NORMAL_RESOLUTION);
+    vec2 sampleStep = max(vec2(nominalStep), uvFootprint);
+    vec2 offset = sampleStep * texel;
+    vec2 rightUV = messyAutoSpriteUV(uv + vec2(offset.x, 0.0), sprite, texel);
+    vec2 leftUV = messyAutoSpriteUV(uv - vec2(offset.x, 0.0), sprite, texel);
+    vec2 downUV = messyAutoSpriteUV(uv + vec2(0.0, offset.y), sprite, texel);
+    vec2 upUV = messyAutoSpriteUV(uv - vec2(0.0, offset.y), sprite, texel);
 
-    // Central differences cancel alternating checkerboard texels naturally.
-    // Keep real stone/gravel relief; only damp exceptional high-contrast edges.
-    float contrast = abs(delta.x) + abs(delta.y);
-    float confidence = smoothstep(0.012, 0.065, contrast) *
-                       (1.0 - 0.60 * smoothstep(0.42, 0.90, contrast));
-    float mipFade = 1.0 - smoothstep(1.0, 1.8, footprint);
+    // A narrow local contrast gate suppresses minor color noise while
+    // preserving sharp boundaries between adjacent pixels in the sprite.
+    float middle = length(baseColor);
+    vec4 contrast = vec4(
+        middle - length(texture2D(albedo, rightUV).rgb),
+        middle - length(texture2D(albedo, leftUV).rgb),
+        middle - length(texture2D(albedo, downUV).rgb),
+        middle - length(texture2D(albedo, upUV).rgb));
+    contrast = sign(contrast) * max(abs(contrast) - 0.05, vec4(0.0));
+    contrast = clamp(contrast, vec4(-0.20), vec4(0.20));
+    vec2 edge = vec2(contrast.x - contrast.y, contrast.z - contrast.w);
+
+    float confidence = smoothstep(0.025, 0.14, length(edge));
+    float mipFade = 1.0 - smoothstep(0.65, 1.25, footprint);
     float distanceFade = 1.0 - smoothstep(32.0, 56.0, distanceToCamera);
     detail = clamp(confidence * mipFade * distanceFade, 0.0, 1.0);
 
-    vec2 slope = clamp(delta, vec2(-0.24), vec2(0.24)) *
-                 (0.95 * MESSY_AUTO_NORMAL_STRENGTH * detail);
+    float resolutionScale = sqrt(float(MESSY_AUTO_NORMAL_RESOLUTION) / 128.0);
+    vec2 samplingCompensation = vec2(nominalStep) / sampleStep;
+    vec2 slope = clamp(edge * samplingCompensation *
+                       (5.0 * MESSY_AUTO_NORMAL_STRENGTH * resolutionScale *
+                        mipFade * distanceFade), vec2(-1.10), vec2(1.10));
     vec3 tangentNormal = normalize(vec3(slope, 1.0));
     return normalize(tangentFrame * tangentNormal);
 }
@@ -68,6 +77,17 @@ float messyAutoDirectRelief(vec3 flatNormal, vec3 bumpedNormal,
     float correction = clamp((pixelLambert + 0.20) / (faceLambert + 0.20),
                              0.70, 1.30);
     return mix(1.0, correction, 0.80);
+}
+
+float messyAutoSkyRelief(vec3 flatNormal, vec3 bumpedNormal,
+                         vec3 skyDirection, float daytime) {
+    // E-Lite's sky/ambient irradiance is also based on the original face.
+    // A small world-up correction makes shallow pixel edges visible in shade,
+    // while night lighting and coloured emitters retain their original color.
+    float facingDifference = dot(normalize(bumpedNormal), skyDirection) -
+                             dot(normalize(flatNormal), skyDirection);
+    float correction = clamp(1.0 + facingDifference * 0.40, 0.75, 1.25);
+    return mix(1.0, correction, 0.70 * daytime);
 }
 
 float messyAutoMaterialRoughness(float textureDetail, float luminance,
@@ -141,6 +161,13 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                 "    float messyTextureVariation = 0.0;\n"
                 "    bool messyAutoMissingMaps = false;\n"
                 "    // === PBR auxiliary")
+
+    # E-Lite's zero-gloss path still evaluates spec_energy in the final light
+    # sum. Without initialization it can show undefined colored light patches
+    # even when there is no specular response to contribute.
+    replace_one(pack, fragment,
+                "    vec3 spec_energy;\n",
+                "    vec3 spec_energy = vec3(0.0);\n")
 
     # Preserve E-Lite's exact atlas UVs. A synthetic height map made solely
     # from color creates false layers on grass/dirt and distorts sprite edges.
@@ -225,6 +252,28 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                 "    #if defined MESSY_IPBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n        // Modify sunlight/moonlight",
                 lab_diffuse_fallback + "    #if defined MESSY_IPBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n        // Modify sunlight/moonlight")
 
+    # Normals should also affect E-Lite's diffuse sky fill, which otherwise
+    # overwhelms the direct-light correction. Keep local RGB emission and
+    # candle light completely unmodified, particularly at night.
+    sky_relief = """    vec3 messyAutoOmni = omni_light;
+    #if defined MESSY_AUTO_MATERIALS && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
+        bool messyUseAutoSky = foliageData.x < 0.3 && isGrass < 0.5;
+        #if defined LabPBR
+            messyUseAutoSky = messyUseAutoSky && messyAutoMissingMaps;
+        #endif
+        if (messyUseAutoSky && light_mix > 0.58) {
+            float daylightSky = smoothstep(0.58, 0.78, light_mix);
+            vec3 upInView = normalize((gbufferModelView * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+            messyAutoOmni *= messyAutoSkyRelief(flat_normal, bumpedNormal,
+                                                upInView, daylightSky);
+        }
+    #endif
+
+"""
+    replace_one(pack, fragment,
+                "    // === Block reflection",
+                sky_relief + "    // === Block reflection")
+
     # In the existing ggxSpecular/reflection call, use a restrained roughness
     # estimate. E-Lite's native material IDs still choose actual reflectivity.
     material = """            #if defined MESSY_IPBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
@@ -277,6 +326,9 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
         #else
             vec3 real_light = computeRealLight(omni_light, direct_light_color, directLight2, shadow_c, vec3(0.0), candle_color);
         #endif""")
+    replace_all(pack, fragment,
+                "computeRealLight(omni_light, direct_light_color,",
+                "computeRealLight(messyAutoOmni, direct_light_color,")
 
     # An in-game diagnostic is essential when users report completely flat
     # normals. Blue = flat face / no relief; yellow = generated or authored
@@ -304,23 +356,27 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                      "// Native LabPBR takes priority for non-neutral _n/_s atlas pixels.\n"
                      "#define MESSY_AUTO_MATERIALS\n"
                      "#define MESSY_AUTO_NORMAL_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5 2.0]\n"
+                     "#define MESSY_AUTO_NORMAL_RESOLUTION 512 // [128 256 512 1024]\n"
                      "//#define MESSY_AUTO_NORMAL_DEBUG\n").encode()
     replace_one(pack, props,
                 "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS <empty> PERF_IMPACT",
-                "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_DEBUG <empty> PERF_IMPACT")
+                "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DEBUG <empty> PERF_IMPACT")
     replace_one(pack, props,
                 "sliders = ",
-                "sliders = MESSY_AUTO_NORMAL_STRENGTH ")
+                "sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION ")
     pack[lang] += ("\noption.MESSY_AUTO_MATERIALS=Automatic Block Materials\n"
                    "option.MESSY_AUTO_MATERIALS.comment=Sprite-generated normals and roughness, including atlas sprites missing both LabPBR maps. Authored map pixels take priority.\n"
                    "option.MESSY_AUTO_NORMAL_STRENGTH=Automatic Normal Detail\n"
-                   "option.MESSY_AUTO_NORMAL_STRENGTH.comment=Strength of generated surface relief. Zero keeps block faces flat.\n"
+                   "option.MESSY_AUTO_NORMAL_STRENGTH.comment=Intensity of generated pixel-edge normals. 1.0 gives strong fine relief; zero keeps block faces flat.\n"
+                   "option.MESSY_AUTO_NORMAL_RESOLUTION=Automatic Normal Resolution\n"
+                   "option.MESSY_AUTO_NORMAL_RESOLUTION.comment=Sub-texel sample precision for raised-looking pixel edges. 512 is the intended detail; lower values soften it. No texture displacement.\n"
                    "option.MESSY_AUTO_NORMAL_DEBUG=Visualize Normal Relief\n"
                    "option.MESSY_AUTO_NORMAL_DEBUG.comment=Diagnostic mode: blue means flat or missing normals; brighter yellow means more relief. Turn off after testing.\n").encode()
     return {
         "default": "conservative automatic normal and roughness shading for terrain and blocks",
         "native_material_classification": True,
-        "diffuse_normal_lighting": "bounded per-pixel Lambert correction of E-Lite vertex direct light; no extra texture fetches",
+        "diffuse_normal_lighting": "per-pixel Lambert correction plus day-gated ambient skylight response; RGB emitters and candle fill unmodified",
+        "uninitialized_specular_fixed": True,
         "texture_depth": "no fabricated height displacement; original atlas UVs preserved; authored LabPBR POM remains supported",
         "weather_response": "lightly lower roughness for wet stone/polished IDs; no new texture reads",
         "labpbr_precedence": "autofallback only when normal atlas pixel is neutral and specular atlas pixel is zero",
