@@ -55,6 +55,20 @@ vec3 messyAutoBumpedNormal(sampler2D albedo, vec2 uv, vec3 baseColor,
     return normalize(tangentFrame * tangentNormal);
 }
 
+float messyAutoDirectRelief(vec3 flatNormal, vec3 bumpedNormal,
+                            vec3 lightDirection) {
+    // E-Lite already applied the face's N.L in the vertex shader. Correct
+    // that existing direct light by the ratio of pixel- and face-normal
+    // Lambert terms instead of multiplying by a tiny absolute difference.
+    // The bias keeps grazing faces stable, and the bounds avoid black/white
+    // speckles at high normal strength. Ambient and emissive light stay intact.
+    float faceLambert = max(dot(normalize(flatNormal), lightDirection), 0.0);
+    float pixelLambert = max(dot(normalize(bumpedNormal), lightDirection), 0.0);
+    float correction = clamp((pixelLambert + 0.14) / (faceLambert + 0.14),
+                             0.55, 1.65);
+    return mix(1.0, correction, 0.90);
+}
+
 float messyAutoMaterialRoughness(float textureDetail, float luminance,
                                  float nativeReflectivity, float rainWetness) {
     // Most atlas sprites are stone/wood/earth. Preserve that matte prior;
@@ -151,9 +165,9 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
     shading_header = "    #if !defined NETHER && (defined LabPBR || defined MESSY_IPBR || defined MESSY_AUTO_MATERIALS) && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)"
     replace_one(pack, fragment, shading_header, lab_fallback + shading_header)
 
-    # For generated data, preserve E-Lite's flat diffuse baseline and apply
-    # only a bounded native shadow_c_relief adjustment. This replaces the old
-    # prototype's severe 0.60..1.50 multiplier (which remains disabled).
+    # E-Lite's direct_light_strength already contains the flat face's N.L,
+    # so generated normals must correct that term by a bounded Lambert ratio.
+    # Keep the original roughness, ambient, RGB lighting and shadow mapping.
     diffuse = """    #if !defined NETHER && (defined LabPBR || defined MESSY_IPBR || defined MESSY_AUTO_MATERIALS) && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
         float shadow_c_relief;
         if(foliageData.x < 0.3) {  
@@ -178,10 +192,10 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
     #elif !defined NETHER && defined MESSY_AUTO_MATERIALS && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
         float shadow_c_relief = directLight2;
         if (foliageData.x < 0.3 && isGrass < 0.5) {
-            vec3 direction = normalize(mix(-sunPosition, sunPosition, light_mix));
-            float baseline = max(dot(flat_normal, direction), 0.0);
-            float adjusted = max(dot(bumpedNormal, direction), 0.0);
-            shadow_c_relief *= clamp(1.0 + 0.90 * (adjusted - baseline), 0.82, 1.18);
+            // Select a nonzero direction at sunrise/sunset. The former
+            // normalize(mix(-sunPosition, sunPosition, 0.5)) was undefined.
+            vec3 direction = normalize(light_mix >= 0.5 ? sunPosition : -sunPosition);
+            shadow_c_relief *= messyAutoDirectRelief(flat_normal, bumpedNormal, direction);
         }
     #else
         float shadow_c_relief = directLight2;
@@ -191,11 +205,9 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
     lab_diffuse_fallback = """
     #if !defined NETHER && defined LabPBR && defined MESSY_AUTO_MATERIALS && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
         if (messyAutoMissingMaps && foliageData.x < 0.3 && isGrass < 0.5) {
-            vec3 direction = normalize(mix(-sunPosition, sunPosition, light_mix));
-            float baseline = max(dot(flat_normal, direction), 0.0);
-            float adjusted = max(dot(bumpedNormal, direction), 0.0);
+            vec3 direction = normalize(light_mix >= 0.5 ? sunPosition : -sunPosition);
             shadow_c_relief = directLight2 *
-                clamp(1.0 + 0.90 * (adjusted - baseline), 0.82, 1.18);
+                messyAutoDirectRelief(flat_normal, bumpedNormal, direction);
         }
     #endif
 """
@@ -298,6 +310,7 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
     return {
         "default": "conservative automatic normal and roughness shading for terrain and blocks",
         "native_material_classification": True,
+        "diffuse_normal_lighting": "bounded per-pixel Lambert correction of E-Lite vertex direct light; no extra texture fetches",
         "weather_response": "lightly lower roughness for wet stone/polished IDs; no new texture reads",
         "labpbr_precedence": "autofallback only when normal atlas pixel is neutral and specular atlas pixel is zero",
         "texture_reads": "up to four additional sprite-local albedo reads close up; two map probes in LabPBR mode",

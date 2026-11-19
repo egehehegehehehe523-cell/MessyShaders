@@ -272,6 +272,15 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("texture2D(normals, texcoord)", fragment)
                 self.assertIn("texture2D(specular, texcoord)", fragment)
                 self.assertIn("shadow_c_relief, shadow_c, vec3(0.0), candle_color", fragment)
+                # Vertex lighting already contains the face-normal Lambert
+                # term. Both native and LabPBR fallback paths must correct it
+                # by a bounded pixel-normal ratio, including low-gloss mode.
+                self.assertEqual(fragment.count(
+                    "messyAutoDirectRelief(flat_normal, bumpedNormal, direction)"), 2)
+                self.assertIn("float messyAutoDirectRelief(", auto_lib)
+                self.assertIn("(pixelLambert + 0.14) / (faceLambert + 0.14)", auto_lib)
+                self.assertIn("0.55, 1.65", auto_lib)
+                self.assertNotIn("normalize(mix(-sunPosition, sunPosition, light_mix))", fragment)
                 self.assertIn("block_color.rgb = mix(vec3(0.05, 0.10, 0.22)", fragment)
                 self.assertIn("clamp(messyBumpAmount * 5.0, 0.0, 1.0)", fragment)
                 # Iris/OptiFine only discover boolean options referenced by
