@@ -177,8 +177,8 @@ def fix_normals(pack:dict[str,bytes])->dict:
     # user's run. Random undefined specular values could amplify normal
     # artifacts and should never enter computeRealLight.
     replace_one(pack,path,
-                "        vec3 gloss;\\n        if(block_type != 1.0){",
-                "        vec3 gloss = vec3(0.0);\\n        if(block_type != 1.0){")
+                "        vec3 gloss;\n        if(block_type != 1.0){",
+                "        vec3 gloss = vec3(0.0);\n        if(block_type != 1.0){")
     return {"visual_shading":"generated normal changes direct-lit RGB by at most 12% while preserving ambient brightness",
             "extra_texture_reads":0,
             "removed_camera_fixed_fake_direction":True,
