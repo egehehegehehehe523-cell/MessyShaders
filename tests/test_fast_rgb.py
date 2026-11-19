@@ -161,7 +161,7 @@ class FastRgbTests(unittest.TestCase):
                 self.assertNotIn("messyReliefDelta", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("entity.26210", z.read("shaders/entity.properties").decode())
                 self.assertIn("if (entity == 10201)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
-                self.assertIn("Normal Map Strength", z.read("shaders/lang/en_US.lang").decode())
+                self.assertIn("Generated Normal Strength", z.read("shaders/lang/en_US.lang").decode())
                 self.assertIn("dynamic_ipbr", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("entity.26201", z.read("shaders/entity.properties").decode())
                 self.assertIn("messyWriteDynamicVoxel", z.read("shaders/common/shadow_vertex.glsl").decode())
