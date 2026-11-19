@@ -122,6 +122,12 @@ class FastRgbTests(unittest.TestCase):
                     '    #ifdef POM\n    #endif\n#endif\n'
                     '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING\n#endif\n'
                     '#if (MATERIAL_GLOSS > 0 && !defined NETHER) || MATERIAL_GLOSS > 1 || defined LabPBR || defined SHADOW_CASTING || defined EMISSIVE_MATERIAL\n#endif\n'
+                    '    // === Parallax\n'
+                    '    #if defined LabPBR && defined POM && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
+                    '        #include "/src/pom.glsl"\n'
+                    '    #else\n'
+                    '        vec2 final_uv = texcoord;\n'
+                    '    #endif\n'
                     '    pure_block_color = texture2D(tex, final_uv);\n'
                     '    lowp float block_luma = luma(block_color.rgb);\n'
                     '    // === PBR auxiliary\n'
@@ -278,9 +284,15 @@ class FastRgbTests(unittest.TestCase):
                 self.assertEqual(fragment.count(
                     "messyAutoDirectRelief(flat_normal, bumpedNormal, direction)"), 2)
                 self.assertIn("float messyAutoDirectRelief(", auto_lib)
-                self.assertIn("(pixelLambert + 0.14) / (faceLambert + 0.14)", auto_lib)
-                self.assertIn("0.55, 1.65", auto_lib)
+                self.assertIn("(pixelLambert + 0.20) / (faceLambert + 0.20)", auto_lib)
+                self.assertIn("0.70, 1.30", auto_lib)
+                self.assertIn("smoothstep(0.58, 0.78, light_mix)", fragment)
                 self.assertNotIn("normalize(mix(-sunPosition, sunPosition, light_mix))", fragment)
+                self.assertIn("MESSY_AUTO_PARALLAX_DEPTH 0.5", config)
+                self.assertIn("vec2 stepUV = viewRay * (3.0 * MESSY_AUTO_PARALLAX_DEPTH", fragment)
+                self.assertIn("for (int stepIndex = 0; stepIndex < 4; ++stepIndex)", fragment)
+                self.assertIn("messyAutoSpriteUV(rayUV + stepUV, atlas_uv, texel)", fragment)
+                self.assertIn("defined GBUFFER_TERRAIN", fragment)
                 self.assertIn("block_color.rgb = mix(vec3(0.05, 0.10, 0.22)", fragment)
                 self.assertIn("clamp(messyBumpAmount * 5.0, 0.0, 1.0)", fragment)
                 # Iris/OptiFine only discover boolean options referenced by
@@ -300,8 +312,9 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("blue means flat or missing normals", z.read("shaders/lang/en_US.lang").decode())
                 props = z.read("shaders/shaders.properties").decode()
                 self.assertIn("MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH", props)
-                self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_DEBUG", props)
-                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH ", props)
+                self.assertIn("MESSY_AUTO_PARALLAX_DEPTH MESSY_AUTO_NORMAL_DEBUG", props)
+                self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_PARALLAX_DEPTH", props)
+                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_PARALLAX_DEPTH ", props)
                 self.assertFalse(info["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"])
                 self.assertFalse(info["native_auto_materials"]["water_lod_changes"])
                 self.assertFalse(info["lod_shading"]["water_depth_refraction_formula_changed"])
