@@ -257,14 +257,19 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
         #endif""")
 
     # An in-game diagnostic is essential when users report completely flat
-    # normals. White = strong generated bump; black = flat face / authored
-    # map. This writes *after* the ordinary final color pipeline and is off
+    # normals. Blue = flat face / no relief; yellow = generated or authored
+    # relief. The visible blue baseline also proves that this shader branch
+    # actually ran. This writes *after* the ordinary final color pipeline and is off
     # by default, costing nothing unless explicitly enabled in the menu.
     replace_one(pack, fragment,
                 '    #include "/src/writebuffers.glsl"',
-                """    #if defined MESSY_AUTO_NORMAL_DEBUG && defined MESSY_AUTO_MATERIALS && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
+                """    #ifdef MESSY_AUTO_NORMAL_DEBUG
+    #if defined MESSY_AUTO_MATERIALS && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
         float messyBumpAmount = length(normalize(bumpedNormal) - normalize(flat_normal));
-        block_color.rgb = vec3(clamp(messyBumpAmount * 5.0, 0.0, 1.0));
+        block_color.rgb = mix(vec3(0.05, 0.10, 0.22),
+                              vec3(1.0, 0.90, 0.45),
+                              clamp(messyBumpAmount * 5.0, 0.0, 1.0));
+    #endif
     #endif
     #include "/src/writebuffers.glsl"
 """
@@ -277,7 +282,7 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                      "// Native LabPBR takes priority for non-neutral _n/_s atlas pixels.\n"
                      "#define MESSY_AUTO_MATERIALS\n"
                      "#define MESSY_AUTO_NORMAL_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5 2.0]\n"
-                     "// #define MESSY_AUTO_NORMAL_DEBUG\n").encode()
+                     "//#define MESSY_AUTO_NORMAL_DEBUG\n").encode()
     replace_one(pack, props,
                 "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS <empty> PERF_IMPACT",
                 "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_DEBUG <empty> PERF_IMPACT")
@@ -289,7 +294,7 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                    "option.MESSY_AUTO_NORMAL_STRENGTH=Automatic Normal Detail\n"
                    "option.MESSY_AUTO_NORMAL_STRENGTH.comment=Strength of generated surface relief. Zero keeps block faces flat.\n"
                    "option.MESSY_AUTO_NORMAL_DEBUG=Visualize Normal Relief\n"
-                   "option.MESSY_AUTO_NORMAL_DEBUG.comment=Diagnostic mode: brighter grayscale means stronger bumps; solid black is flat. Turn off after testing.\n").encode()
+                   "option.MESSY_AUTO_NORMAL_DEBUG.comment=Diagnostic mode: blue means flat or missing normals; brighter yellow means more relief. Turn off after testing.\n").encode()
     return {
         "default": "conservative automatic normal and roughness shading for terrain and blocks",
         "native_material_classification": True,

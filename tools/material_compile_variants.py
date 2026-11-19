@@ -21,13 +21,18 @@ def variants(flattened: Path, output: Path) -> list[Path]:
             source = input_file.read_text(encoding="utf-8")
             if source.count("#define MATERIAL_GLOSS 1") < 1:
                 raise ValueError(f"Missing default material gloss definition: {input_file}")
-            for flavor in ("low_gloss", "labpbr"):
+            for flavor in ("low_gloss", "labpbr", "debug_normals"):
                 code = source
                 if flavor == "low_gloss":
                     code = code.replace("#define MATERIAL_GLOSS 1", "#define MATERIAL_GLOSS 0")
-                else:
+                elif flavor == "labpbr":
                     code = code.replace("#version 430 compatibility\n",
                                         "#version 430 compatibility\n#define LabPBR 1\n", 1)
+                else:
+                    # Compile the debug branch too: the option is off by
+                    # default, so a normal pack build would never test it.
+                    code = code.replace("#version 430 compatibility\n",
+                                        "#version 430 compatibility\n#define MESSY_AUTO_NORMAL_DEBUG 1\n", 1)
                 target = output / f"{name}_{flavor}.{stage}"
                 target.write_text(code, encoding="utf-8")
                 result.append(target)

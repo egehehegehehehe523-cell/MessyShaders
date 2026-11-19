@@ -258,6 +258,8 @@ class FastRgbTests(unittest.TestCase):
                                    config.index("// #define MESSY_IPBR"))
                 self.assertIn("#define MESSY_AUTO_MATERIALS\n", config)
                 self.assertIn("#define MESSY_AUTO_NORMAL_STRENGTH 1.0", config)
+                # Match the conventional Iris commented-out boolean macro.
+                self.assertIn("//#define MESSY_AUTO_NORMAL_DEBUG\n", config)
                 self.assertGreater(config.index("#define MESSY_AUTO_MATERIALS"),
                                    config.index("#undef MESSY_IPBR"))
                 fragment = z.read("shaders/common/solid_blocks_fragment.glsl").decode()
@@ -270,7 +272,11 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("texture2D(normals, texcoord)", fragment)
                 self.assertIn("texture2D(specular, texcoord)", fragment)
                 self.assertIn("shadow_c_relief, shadow_c, vec3(0.0), candle_color", fragment)
-                self.assertIn("block_color.rgb = vec3(clamp(messyBumpAmount * 5.0", fragment)
+                self.assertIn("block_color.rgb = mix(vec3(0.05, 0.10, 0.22)", fragment)
+                self.assertIn("clamp(messyBumpAmount * 5.0, 0.0, 1.0)", fragment)
+                # Iris/OptiFine only discover boolean options referenced by
+                # #ifdef/#ifndef, not only inside #if defined(...).
+                self.assertIn("#ifdef MESSY_AUTO_NORMAL_DEBUG", fragment)
                 self.assertIn('    #include "/src/writebuffers.glsl"\n', fragment)
                 self.assertNotIn('    #include "/src/writebuffers.glsl\n', fragment)
                 self.assertIn("defined LabPBR || defined MESSY_IPBR || defined MESSY_AUTO_MATERIALS", vertex)
@@ -282,8 +288,10 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("rainWetness * (0.12 + 0.06 * polished)", auto_lib)
                 self.assertIn("Automatic Block Materials", z.read("shaders/lang/en_US.lang").decode())
                 self.assertIn("Visualize Normal Relief", z.read("shaders/lang/en_US.lang").decode())
+                self.assertIn("blue means flat or missing normals", z.read("shaders/lang/en_US.lang").decode())
                 props = z.read("shaders/shaders.properties").decode()
                 self.assertIn("MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH", props)
+                self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_DEBUG", props)
                 self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH ", props)
                 self.assertFalse(info["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"])
                 self.assertFalse(info["native_auto_materials"]["water_lod_changes"])
