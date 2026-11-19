@@ -42,53 +42,68 @@ def apply_fast_post(pack: dict[str, bytes]) -> dict:
                     axis.x * turn.y + axis.y * turn.x);
 """)
 
+    # Keep E-Lite's original ray reprojection after a report of edge warp.
+    # Only attenuate reflection alpha near/outside the screen, where the
+    # mirrored or clamped off-screen image would otherwise be displayed.
     reflection = "shaders/lib/reflections_engine.glsl"
-    old_projection = """        float useFallback = float(infinite > 0.5);
-        vec2 ssr_uv;
-
-        vec3 view_pos = screen_to_camera(march_result);
-        vec3 curr_world_pos = mat3(gbufferModelViewInverse) * view_pos + gbufferModelViewInverse[3].xyz;
-        vec3 prev_world_pos = curr_world_pos + (cameraPosition - previousCameraPosition);
-        vec3 prev_view_pos = mat3(gbufferPreviousModelView) * prev_world_pos + gbufferPreviousModelView[3].xyz;
-
-        vec2 prev_proj = vec2(
-            gbufferPreviousProjection[0].x,
-            gbufferPreviousProjection[1].y
-        ) * prev_view_pos.xy + gbufferPreviousProjection[3].xy;
-
-        ssr_uv = (prev_proj / -prev_view_pos.z) * 0.5 + 0.5;
-
-        vec2 fallback_uv = fallback.xy;
-
-        final_uv = mix(ssr_uv, fallback_uv, useFallback);
-"""
-    new_projection = """        // Failed ray marches do not need the unused hit's reprojection.
-        if (infinite > 0.5) {
-            final_uv = fallback.xy;
-        } else {
-            vec3 view_pos = screen_to_camera(march_result);
-            vec3 curr_world_pos = mat3(gbufferModelViewInverse) * view_pos + gbufferModelViewInverse[3].xyz;
-            vec3 prev_world_pos = curr_world_pos + (cameraPosition - previousCameraPosition);
-            vec3 prev_view_pos = mat3(gbufferPreviousModelView) * prev_world_pos + gbufferPreviousModelView[3].xyz;
-            vec2 prev_proj = vec2(
-                gbufferPreviousProjection[0].x,
-                gbufferPreviousProjection[1].y
-            ) * prev_view_pos.xy + gbufferPreviousProjection[3].xy;
-            final_uv = (prev_proj / -prev_view_pos.z) * 0.5 + 0.5;
-        }
-"""
-    replace_exact(pack, reflection, old_projection, new_projection)
     replace_exact(pack, reflection,
         "    float border = min(border_x, border_y);\n    \n",
         """    float border = min(border_x, border_y);
-    // The caller blends this reflection with exactly border alpha.
-    // A zero-alpha reflection never needs three RGB texture fetches.
+    float edgeDistance = min(min(final_uv.x, 1.0 - final_uv.x),
+                             min(final_uv.y, 1.0 - final_uv.y));
+    border *= smoothstep(0.0, 0.04, edgeDistance);
     if (border <= 0.0) return vec4(0.0);
 
 """)
+    # E-Lite originally reflects offscreen water samples horizontally back
+    # into the viewport, visibly folding the scene at the edges. Fade into
+    # sky/environment reflections instead; never mirror a screen texture.
+    water = "shaders/lib/water.glsl"
+    old_water_reflection = """    pos.x = abs(pos.x);
+
+    if (pos.x > RENDER_SCALE) {
+        pos.x = RENDER_SCALE - (pos.x - RENDER_SCALE);
+    }
+
+    return vec4(texture2D(gaux1, pos.xy).rgb, border);
+""".replace("\n\n    return", "\n    \n    return")
+    replace_exact(pack, water, old_water_reflection,
+        """    vec2 screenUV = pos.xy / RENDER_SCALE;
+    float edgeDistance = min(min(screenUV.x, 1.0 - screenUV.x),
+                             min(screenUV.y, 1.0 - screenUV.y));
+    border *= smoothstep(0.0, 0.05, edgeDistance);
+    if (border <= 0.0) return vec4(0.0);
+
+    return vec4(texture2D(gaux1, pos.xy).rgb, border);
+""")
+
+    # Default to actual E-Lite shader water even if a saved Iris profile
+    # requests vanilla water or resource-pack water texture. Users may turn
+    # this option off to restore the original E-Lite water configuration.
+    config = "shaders/lib/config.glsl"
+    pack[config] += b"""
+// MessyShaders: prefer shader-simulated near and LOD water over atlas water.
+#define MESSY_SHADER_WATER
+#ifdef MESSY_SHADER_WATER
+    #ifdef VANILLA_WATER
+        #undef VANILLA_WATER
+    #endif
+    #undef WATER_TEXTURE
+    #define WATER_TEXTURE 0
+#endif
+"""
+    props = "shaders/shaders.properties"
+    replace_exact(pack, props,
+        "MESSY_AUTO_NORMAL_DEBUG PERF_IMPACT",
+        "MESSY_AUTO_NORMAL_DEBUG MESSY_SHADER_WATER PERF_IMPACT")
+    pack["shaders/lang/en_US.lang"] += (
+        "\noption.MESSY_SHADER_WATER=Shader Water (No Vanilla Texture)\n"
+        "option.MESSY_SHADER_WATER.comment=Keep E-Lite's animated/refraction water even when older Iris profiles request vanilla/resource-pack water. Disable to restore E-Lite's water-mode options.\n"
+    ).encode()
     return {
         "bloom": "incremental golden-angle rotation; same symmetric taps",
-        "reflections": "zero-alpha sample skip and failed-ray reprojection skip",
-        "default_profile_changed": False,
+        "reflections": "water offscreen mirror removed; water and solid reflection edge fade, original ray reprojection retained",
+        "water": "shader water on by default; opt-out restores original vanilla/resource texture selection",
+        "default_profile_changed": True,
         "gpu_measured": False,
     }

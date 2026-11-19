@@ -12,6 +12,28 @@ Supplied comparison archives:
 
 See [the fast-path audit](docs/FAST_PATH_AUDIT.md).
 
+## November 19: world-light and water recovery (after build #95)
+
+Tester feedback on build #95 showed world RGB light disappearing except for
+the older held-light approximation, near and distant water looking like a
+vanilla texture, and screen-edge reflection folding. The experimental
+shared-memory RGB seed tile has therefore been **withdrawn**; the seed shader
+is restored exactly to the working #94 fused implementation. The original
+moving-light positions, generated normals, and RGB diffusion reach remain.
+
+Water now defaults to the actual E-Lite shader refraction/wave path via
+`MESSY_SHADER_WATER` in **Messy Features**, overriding persisted vanilla or
+resource-pack water-mode selections. Turning this option off restores E-Lite's
+original water choices. The stock water reflection's horizontal screen-image
+mirror is removed, fading to sky reflection outside the valid screen area;
+solid reflections similarly fade at the edge, while their ray reprojection
+math is restored. Depth decoding, refraction absorption and near-water normal
+waves are otherwise left alone. The bloom trig simplification remains.
+
+This is a conservative stability rebuild. Offline GLSL compilation and unit
+tests do not validate in-game water appearance or RGB on every Iris/driver
+combination. Recheck a placed sea lantern and a moving light independently.
+
 ## November 19: material visibility and distant-shading repair
 
 **Why normal maps looked absent:** The previous automatic-material fallback only sampled two adjacent texels and discarded most high-contrast stone/gravel variation; it also disabled itself wholesale with `LabPBR` enabled. Worse, on `MATERIAL_GLOSS=0` profiles E-Lite did not use the computed relief in its no-gloss lighting branch. The replacement now uses **four symmetric sprite-local taps**, retains bounded detail on gravel, routes relief through the low-performance diffuse path, and independently generates normals for pixels where Iris reports neutral normal and zero specular maps. Authored non-neutral LabPBR pixels keep their original material values. The ambiguous case of deliberately flat/black authored PBR pixels cannot be distinguished from missing maps without explicit atlas metadata.

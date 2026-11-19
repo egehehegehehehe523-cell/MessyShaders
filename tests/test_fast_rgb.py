@@ -40,8 +40,29 @@ class FastRgbTests(unittest.TestCase):
         base = read_source(SOURCE)
         generated = dict(base)
         apply_overrides(generated, None)
-        self.assertEqual(generated["shaders/lib/water.glsl"],
-                         base["shaders/lib/water.glsl"])
+        water = generated["shaders/lib/water.glsl"].decode()
+        original = base["shaders/lib/water.glsl"].decode()
+        # An explicit reflection edge fade replaces the old mirror-wrap;
+        # depth, refraction, waves, and absorption must stay untouched.
+        original_mirror = """    pos.x = abs(pos.x);
+
+    if (pos.x > RENDER_SCALE) {
+        pos.x = RENDER_SCALE - (pos.x - RENDER_SCALE);
+    }
+
+    return vec4(texture2D(gaux1, pos.xy).rgb, border);
+""".replace("\n\n    return", "\n    \n    return")
+        new_fade = """    vec2 screenUV = pos.xy / RENDER_SCALE;
+    float edgeDistance = min(min(screenUV.x, 1.0 - screenUV.x),
+                             min(screenUV.y, 1.0 - screenUV.y));
+    border *= smoothstep(0.0, 0.05, edgeDistance);
+    if (border <= 0.0) return vec4(0.0);
+
+    return vec4(texture2D(gaux1, pos.xy).rgb, border);
+"""
+        self.assertEqual(water.replace(new_fade, original_mirror), original)
+        self.assertIn("#undef VANILLA_WATER", generated["shaders/lib/config.glsl"].decode())
+        self.assertIn("#define WATER_TEXTURE 0", generated["shaders/lib/config.glsl"].decode())
         far = generated["shaders/lib/water_voxy.glsl"].decode()
         # Only the three shading constants change in Voxy's library; the
         # sensitive water depth and refraction code is byte-for-byte intact.
@@ -112,11 +133,9 @@ class FastRgbTests(unittest.TestCase):
                     self.assertEqual(old_step(pos), fused_step(pos))
         fused = seed_source()
         self.assertIn("layout(rgba8) uniform writeonly image3D messyRgbB;", fused)
-        self.assertIn("vec3 center = messySeedTile[tileXY.x][tileXY.y];", fused)
-        self.assertIn("shared vec3 messySeedTile[10][10];", fused)
-        self.assertIn("barrier();", fused)
-        for side in ("localXY.x == 0", "localXY.x == 7", "localXY.y == 0", "localXY.y == 7"):
-            self.assertIn(side, fused)
+        self.assertIn("vec3 center = messySeedAt(p);", fused)
+        self.assertNotIn("messySeedTile", fused)
+        self.assertNotIn("barrier();", fused)
         self.assertIn("if (imageLoad(messyOpaqueVolume, p).r != 0u)", fused)
         self.assertIn("vec4(max(center, neighbor * 0.88), 1.0)", fused)
         self.assertNotIn("imageStore(messyRgbA", fused)
@@ -138,17 +157,24 @@ class FastRgbTests(unittest.TestCase):
                 axis = (axis[0] * math.cos(turn) - axis[1] * math.sin(turn),
                         axis[0] * math.sin(turn) + axis[1] * math.cos(turn))
 
-    def test_post_optimizations_do_not_touch_water_or_normal_pipeline(self):
+    def test_post_optimizations_keep_water_refraction_and_normal_pipeline(self):
         original = read_source(SOURCE)
         pack = {path: original[path] for path in
                 ("shaders/lib/bloom.glsl", "shaders/lib/reflections_engine.glsl",
-                 "shaders/lib/water.glsl", "shaders/common/solid_blocks_fragment.glsl")}
+                 "shaders/lib/water.glsl", "shaders/common/solid_blocks_fragment.glsl",
+                 "shaders/lib/config.glsl", "shaders/shaders.properties",
+                 "shaders/lang/en_US.lang")}
+        # The isolated patch is normally applied after native auto-material
+        # options have supplied the Messy Features screen.
+        pack["shaders/shaders.properties"] = b"MESSY_AUTO_NORMAL_DEBUG PERF_IMPACT"
         apply_fast_post(pack)
         self.assertIn("vec2 axis = vec2(cos(firstAngle), sin(firstAngle));",
                       pack["shaders/lib/bloom.glsl"].decode())
         self.assertIn("if (border <= 0.0) return vec4(0.0);",
                       pack["shaders/lib/reflections_engine.glsl"].decode())
-        self.assertEqual(pack["shaders/lib/water.glsl"], original["shaders/lib/water.glsl"])
+        self.assertIn("border *= smoothstep(0.0, 0.05, edgeDistance);",
+                      pack["shaders/lib/water.glsl"].decode())
+        self.assertIn("float water_absortion;", pack["shaders/lib/water.glsl"].decode())
         self.assertEqual(pack["shaders/common/solid_blocks_fragment.glsl"],
                          original["shaders/common/solid_blocks_fragment.glsl"])
 
@@ -330,7 +356,8 @@ class FastRgbTests(unittest.TestCase):
                     '#define VOXY_WATER\n#include "/common/water_voxy_blocks_fragment.glsl"\n')
             # Exercise real E-Lite optimization anchors in the synthetic ZIP.
             original_post = read_source(SOURCE)
-            for name in ("shaders/lib/bloom.glsl", "shaders/lib/reflections_engine.glsl"):
+            for name in ("shaders/lib/bloom.glsl", "shaders/lib/reflections_engine.glsl",
+                         "shaders/lib/water.glsl"):
                 src[name] = original_post[name].decode("utf-8")
             with ZipFile(zsource, "w") as z:
                 for key, val in src.items():
@@ -359,7 +386,8 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("Generated Normal Strength", z.read("shaders/lang/en_US.lang").decode())
                 self.assertNotIn("Raised Texture Depth", z.read("shaders/lang/en_US.lang").decode())
                 seed = z.read("shaders/world0/prepare.csh").decode()
-                self.assertIn("shared vec3 messySeedTile[10][10]", seed)
+                self.assertNotIn("messySeedTile", seed)
+                self.assertIn("#define MESSY_SHADER_WATER", z.read("shaders/lib/config.glsl").decode())
                 self.assertIn("messyRgbB", seed)
                 # Only five standalone propagation passes remain, while the
                 # actual six strides and 16-block reach are unchanged.
