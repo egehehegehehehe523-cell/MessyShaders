@@ -152,6 +152,21 @@ def add_voxy(pack:dict[str,bytes])->dict:
     realLight += messyAppliedRGB(messyVoxyUVW, frameCounter) * 1.2;
 """
     patch_once(pack,opaque,anchor,shade+anchor)
+    # Preserve E-Lite's Voxy water/refraction path. Only add the shared
+    # near-camera light to its three existing water/translucent light sums.
+    water="shaders/common/water_voxy_blocks_fragment.glsl"
+    patch_once(pack,water,'#include "/lib/luma.glsl"',
+               '#include "/lib/luma.glsl"\n#include "/lib/messy_rgb_sample.glsl"')
+    patch_once(pack,water,
+               "    vec4 worldPos = vxModelViewInv * viewSpacePos4D;",
+               """    vec4 worldPos = vxModelViewInv * viewSpacePos4D;
+    vec3 messyWaterUVW = (worldPos.xyz + fract(cameraPosition) + vec3(24.0)) / 48.0;
+    vec3 messyWaterRGB = messyAppliedRGB(messyWaterUVW, frameCounter) * 1.2;""")
+    water_body=pack[water].decode("utf-8")
+    count=water_body.count("+ candleColor;")
+    if count != 3:
+        raise ValueError("Unexpected E-Lite Voxy translucent light assignment count: "+str(count))
+    pack[water]=water_body.replace("+ candleColor;", "+ candleColor + messyWaterRGB;").encode("utf-8")
     patch_once(pack,meta,'"frameTimeCounter",', '"frameTimeCounter",\n    "frameCounter",')
     patch_once(pack,meta,'"noisetex": "sampler2D",',
                '"noisetex": "sampler2D",\n'
@@ -160,7 +175,7 @@ def add_voxy(pack:dict[str,bytes])->dict:
     return {"uses_native_e_lite_voxy":True,
             "added_uniform":"frameCounter",
             "samplers":["messyRgbHistoryASampler","messyRgbHistoryBSampler"],
-            "scope":"nearby opaque Voxy geometry only; distant LODs unchanged",
+            "scope":"nearby opaque and translucent Voxy geometry; distant LODs unchanged",
             "limitations":["No extra 3D voxelization of distant Voxy chunks",
                            "No Voxy source edits/mixins",
                            "Voxy custom sampler binding needs in-game verification"]}
