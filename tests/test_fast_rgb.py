@@ -13,12 +13,22 @@ from tools.build_fast_rgb import (
 )
 
 class FastRgbTests(unittest.TestCase):
-    def test_real_water_libraries_restored(self):
+    def test_water_depth_and_near_shader_remain_stable(self):
         base = read_source(SOURCE)
         generated = dict(base)
         apply_overrides(generated, None)
-        for path in ("shaders/lib/water.glsl", "shaders/lib/water_voxy.glsl"):
-            self.assertEqual(generated[path], base[path], path)
+        self.assertEqual(generated["shaders/lib/water.glsl"],
+                         base["shaders/lib/water.glsl"])
+        far = generated["shaders/lib/water_voxy.glsl"].decode()
+        # Only the three shading constants change in Voxy's library; the
+        # sensitive water depth and refraction code is byte-for-byte intact.
+        far = far.replace("rainStrength * 0.333 * WATER_TURBULENCE",
+                          "rainStrength * 0.6 * WATER_TURBULENCE")
+        far = far.replace("bump *= vec3(NdotE) + vec3(0.05, 0.1, 1.0 - NdotE);",
+                          "bump *= vec3(NdotE) + vec3(0.0, 0.0, 1.0 - NdotE);")
+        far = far.replace("mix(vec3(0.95, 1.0, 1.0), vec3(0.8, 1.1, 1.4) * 0.9, water_absortion)",
+                          "mix(vec3(0.9, 1.0, 1.0), vec3(0.8, 1.3, 1.6) * 0.9, water_absortion)")
+        self.assertEqual(far.encode(), base["shaders/lib/water_voxy.glsl"])
 
     def test_rgb_propagation_range_keeps_six_dispatches_and_checks_walls(self):
         self.assertEqual(len(PROPAGATION_STRIDES), 6)
@@ -133,6 +143,7 @@ class FastRgbTests(unittest.TestCase):
                     '    #else\n'
                     '        float shadow_c_relief = directLight2;\n'
                     '    #endif\n'
+                    '            currentRoughness = squarePow(1.0 - smoothness);\n'
                     '            float final_gloss_power = glossParms.g;\n'
                     '            float block_luma2 = pow(block_luma * glossParms.b, glossParms.a);\n'
                     '            float isMetal = 0.0;\n'
@@ -140,13 +151,16 @@ class FastRgbTests(unittest.TestCase):
                     '    #if defined LabPBR && defined POM && defined POM_SHADOW && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
                     '        vec3 gloss;\n        if(block_type != 1.0){\n'
                     '        }\n'
-                    '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
+                    '        vec3 real_light = computeRealLight(omni_light, direct_light_color, directLight2, shadow_c, vec3(0.0), candle_color);\n'
+                    '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n'
+                    '    #include "/src/writebuffers.glsl"\n',
                 "shaders/common/solid_voxy_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
                     '        float material_gloss_factor = materialGloss(reflect(viewPositionNormalized, normal), lmcoord, glossPower, normal) * glossFactor;\n'
                     '    blockColor.rgb *= mix(realLight, vec3(1.0), nightVision * 0.125);\n',
                 "shaders/common/water_voxy_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
+                    '            clamp(fogFragCoord / float(vxRenderDistance * 16), 0.0, 1.0),\n'
                     '    vec4 worldPos = vxModelViewInv * viewSpacePos4D;\n'
                     '        vec3 waterNormalBase = normal_waves_voxy(worldposition.xzy);\n'
                     '    realLight = vec3(0.0) +\n                candleColor;\n'
@@ -167,6 +181,8 @@ class FastRgbTests(unittest.TestCase):
                     '        water_absortion = max(earth_distance - water_distance, 0.0);\n'
                     '        water_absortion = (1.0 / -((water_absortion * WATER_ABSORPTION) + 1.33)) + 1.0;\n'
                     'mix(vec3(0.9, 1.0, 1.0), vec3(0.8, 1.3, 1.6) * 0.9, water_absortion)\n',
+                "shaders/src/voxy_position_light.glsl":
+                    'float visibleSky = clamp(illumination.y, 0.0, 1.0);\n',
                 "shaders/entity.properties": "entity.10101=minecraft:lightning_bolt\n",
                 "shaders/common/shadow_vertex.glsl":
                     'attribute vec4 mc_Entity;\n    worldPos = positions.xyz;\n',
@@ -241,7 +257,7 @@ class FastRgbTests(unittest.TestCase):
                 self.assertGreater(config.index("#undef MESSY_IPBR"),
                                    config.index("// #define MESSY_IPBR"))
                 self.assertIn("#define MESSY_AUTO_MATERIALS\n", config)
-                self.assertIn("#define MESSY_AUTO_NORMAL_STRENGTH 0.75", config)
+                self.assertIn("#define MESSY_AUTO_NORMAL_STRENGTH 1.0", config)
                 self.assertGreater(config.index("#define MESSY_AUTO_MATERIALS"),
                                    config.index("#undef MESSY_IPBR"))
                 fragment = z.read("shaders/common/solid_blocks_fragment.glsl").decode()
@@ -250,16 +266,28 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("#elif defined MESSY_AUTO_MATERIALS && !defined LabPBR", fragment)
                 self.assertIn("bumpedNormal = messyAutoBumpedNormal(", fragment)
                 self.assertIn("currentRoughness = messyAutoMaterialRoughness(", fragment)
+                self.assertIn("messyAutoMissingMaps", fragment)
+                self.assertIn("texture2D(normals, texcoord)", fragment)
+                self.assertIn("texture2D(specular, texcoord)", fragment)
+                self.assertIn("shadow_c_relief, shadow_c, vec3(0.0), candle_color", fragment)
+                self.assertIn("block_color.rgb = vec3(clamp(messyBumpAmount * 5.0", fragment)
                 self.assertIn("defined LabPBR || defined MESSY_IPBR || defined MESSY_AUTO_MATERIALS", vertex)
                 self.assertIn("texture2D(albedo, rightUV)", auto_lib)
-                self.assertIn("1.0 - smoothstep(0.17, 0.39, contrast)", auto_lib)
-                self.assertIn("distanceToCamera > 48.0", auto_lib)
+                self.assertIn("texture2D(albedo, leftUV)", auto_lib)
+                self.assertIn("texture2D(albedo, upUV)", auto_lib)
+                self.assertIn("texture2D(albedo, downUV)", auto_lib)
+                self.assertIn("distanceToCamera > 56.0", auto_lib)
+                self.assertIn("rainWetness * (0.12 + 0.06 * polished)", auto_lib)
                 self.assertIn("Automatic Block Materials", z.read("shaders/lang/en_US.lang").decode())
+                self.assertIn("Visualize Normal Relief", z.read("shaders/lang/en_US.lang").decode())
                 props = z.read("shaders/shaders.properties").decode()
                 self.assertIn("MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH", props)
                 self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH ", props)
                 self.assertFalse(info["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"])
                 self.assertFalse(info["native_auto_materials"]["water_lod_changes"])
+                self.assertFalse(info["lod_shading"]["water_depth_refraction_formula_changed"])
+                self.assertIn("/ 32.0", z.read("shaders/common/water_voxy_blocks_fragment.glsl").decode())
+                self.assertIn("illumination.y - 0.0695", z.read("shaders/src/voxy_position_light.glsl").decode())
                 self.assertIn("max_propagation_reach", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("image.messyEmitVolume",

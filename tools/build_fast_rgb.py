@@ -345,6 +345,13 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_voxy_lite import apply_lite_voxy
     report["lite_voxy"] = apply_lite_voxy(payload)
+    # Small near/LOD water and skylight parity changes. Crucially, this does
+    # not revive the earlier broken Voxy depth/absorption experiment.
+    try:
+        from .patch_lod_shading import apply_lod_shading
+    except ImportError:
+        from patch_lod_shading import apply_lod_shading
+    report["lod_shading"] = apply_lod_shading(payload)
     report["limitations"] = [
         "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
         "Approximate voxel occlusion; thin/translucent block correctness pending",
