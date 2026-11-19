@@ -163,10 +163,10 @@ def add_voxy(pack:dict[str,bytes])->dict:
     vec3 messyWaterUVW = (worldPos.xyz + fract(cameraPosition) + vec3(24.0)) / 48.0;
     vec3 messyWaterRGB = messyAppliedRGB(messyWaterUVW, frameCounter) * 1.2;""")
     water_body=pack[water].decode("utf-8")
-    count=water_body.count("+ candleColor;")
+    count=water_body.count("                candleColor;")
     if count != 3:
         raise ValueError("Unexpected E-Lite Voxy translucent light assignment count: "+str(count))
-    pack[water]=water_body.replace("+ candleColor;", "+ candleColor + messyWaterRGB;").encode("utf-8")
+    pack[water]=water_body.replace("                candleColor;", "                candleColor + messyWaterRGB;").encode("utf-8")
     patch_once(pack,meta,'"frameTimeCounter",', '"frameTimeCounter",\n    "frameCounter",')
     patch_once(pack,meta,'"noisetex": "sampler2D",',
                '"noisetex": "sampler2D",\n'
