@@ -43,6 +43,7 @@ def main():
         if n.endswith((".vsh", ".fsh"))
         and n.rsplit("/", 1)[0] + "/" in valid_roots
         and (n.rsplit("/", 1)[1].startswith("gbuffers_")
+             or n.rsplit("/", 1)[1].startswith("clrwl_")
              or n.rsplit("/", 1)[1].startswith("shadow."))
     )
     if not any("gbuffers_water.vsh" in n for n in checks):
@@ -58,7 +59,8 @@ def main():
         text = text[:match.start()] + (
             "#version 430 compatibility\n#define IS_IRIS 1\n"
             "#define MC_VERSION 12101\n"
-            "#define MC_RENDER_STAGE_OUTLINE 100"
+            "#define MC_RENDER_STAGE_OUTLINE 100\n"
+            "#define MESSY_OFFLINE_TEST 1"
         ) + text[match.end():]
         stage = "vert" if name.endswith(".vsh") else "frag"
         ident = name.replace("/", "__").replace(".vsh", "").replace(".fsh", "")
