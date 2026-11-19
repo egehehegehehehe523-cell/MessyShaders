@@ -142,50 +142,9 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                 "    bool messyAutoMissingMaps = false;\n"
                 "    // === PBR auxiliary")
 
-    # LabPBR's existing POM requires a real _n height map. For atlas sprites
-    # with only albedo, approximate a height field at close range. Four small
-    # ray steps give more convincing raised/recessed texels than a single
-    # UV smear; skip foliage and water. It never displaces real geometry.
-    replace_one(pack, fragment,
-                "    #ifdef POM\n",
-                "    #if defined POM || defined MESSY_AUTO_MATERIALS\n")
-    replace_one(pack, fragment,
-                """    #if defined LabPBR && defined POM && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
-        #include "/src/pom.glsl"
-    #else
-        vec2 final_uv = texcoord;
-    #endif""",
-                """    #if defined LabPBR && defined POM && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
-        #include "/src/pom.glsl"
-    #elif defined MESSY_AUTO_MATERIALS && !defined LabPBR && defined GBUFFER_TERRAIN
-        vec2 final_uv = texcoord;
-        if (MESSY_AUTO_PARALLAX_DEPTH > 0.0 && foliageData.x < 0.3 &&
-            data_pack_a.z < 0.5 && vDistTg.a < 16.0 && vDistTg.z < -0.08) {
-            vec3 viewTangent = normalize(vDistTg.rgb);
-            vec2 viewRay = clamp(viewTangent.xy / max(-viewTangent.z, 0.35),
-                                 vec2(-1.25), vec2(1.25));
-            vec2 texel = 1.0 / max(vec2(atlasSize), vec2(16.0));
-            float distanceFade = 1.0 - smoothstep(8.0, 16.0, vDistTg.a);
-            vec2 stepUV = viewRay * (3.0 * MESSY_AUTO_PARALLAX_DEPTH *
-                          distanceFade * 0.25) * texel;
-            if (dot(stepUV, stepUV) > dot(texel, texel) * 0.0001) {
-                float rayDepth = 0.0;
-                vec2 rayUV = texcoord;
-                // The texture's own luminance supplies an approximate height.
-                // Clamp every probe to this one sprite, never its atlas neighbors.
-                for (int stepIndex = 0; stepIndex < 4; ++stepIndex) {
-                    float height = dot(texture2D(tex, rayUV).rgb,
-                                       vec3(0.2126, 0.7152, 0.0722));
-                    if (height >= 1.0 - rayDepth) break;
-                    rayDepth += 0.25;
-                    rayUV = messyAutoSpriteUV(rayUV + stepUV, atlas_uv, texel);
-                }
-                final_uv = rayUV;
-            }
-        }
-    #else
-        vec2 final_uv = texcoord;
-    #endif""")
+    # Preserve E-Lite's exact atlas UVs. A synthetic height map made solely
+    # from color creates false layers on grass/dirt and distorts sprite edges.
+    # Genuine LabPBR _n alpha height maps can still use the native POM path.
 
     # When LabPBR is enabled but a modded atlas sprite has no _n or _s
     # texture, Iris fills both samplers with neutral values. Respect real maps
@@ -345,30 +304,27 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
                      "// Native LabPBR takes priority for non-neutral _n/_s atlas pixels.\n"
                      "#define MESSY_AUTO_MATERIALS\n"
                      "#define MESSY_AUTO_NORMAL_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5 2.0]\n"
-                     "#define MESSY_AUTO_PARALLAX_DEPTH 0.5 // [0.0 0.25 0.5 0.75 1.0]\n"
                      "//#define MESSY_AUTO_NORMAL_DEBUG\n").encode()
     replace_one(pack, props,
                 "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS <empty> PERF_IMPACT",
-                "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_PARALLAX_DEPTH MESSY_AUTO_NORMAL_DEBUG <empty> PERF_IMPACT")
+                "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_DEBUG <empty> PERF_IMPACT")
     replace_one(pack, props,
                 "sliders = ",
-                "sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_PARALLAX_DEPTH ")
+                "sliders = MESSY_AUTO_NORMAL_STRENGTH ")
     pack[lang] += ("\noption.MESSY_AUTO_MATERIALS=Automatic Block Materials\n"
                    "option.MESSY_AUTO_MATERIALS.comment=Sprite-generated normals and roughness, including atlas sprites missing both LabPBR maps. Authored map pixels take priority.\n"
                    "option.MESSY_AUTO_NORMAL_STRENGTH=Automatic Normal Detail\n"
                    "option.MESSY_AUTO_NORMAL_STRENGTH.comment=Strength of generated surface relief. Zero keeps block faces flat.\n"
-                   "option.MESSY_AUTO_PARALLAX_DEPTH=Automatic Texture Depth\n"
-                   "option.MESSY_AUTO_PARALLAX_DEPTH.comment=Close-range four-step parallax from texture color, not actual raised geometry. Zero disables extra texture probes.\n"
                    "option.MESSY_AUTO_NORMAL_DEBUG=Visualize Normal Relief\n"
                    "option.MESSY_AUTO_NORMAL_DEBUG.comment=Diagnostic mode: blue means flat or missing normals; brighter yellow means more relief. Turn off after testing.\n").encode()
     return {
         "default": "conservative automatic normal and roughness shading for terrain and blocks",
         "native_material_classification": True,
         "diffuse_normal_lighting": "bounded per-pixel Lambert correction of E-Lite vertex direct light; no extra texture fetches",
-        "texture_depth": "up to four albedo height probes on solid terrain within 16 blocks; adjustable four-step parallax, disabled at zero",
+        "texture_depth": "no fabricated height displacement; original atlas UVs preserved; authored LabPBR POM remains supported",
         "weather_response": "lightly lower roughness for wet stone/polished IDs; no new texture reads",
         "labpbr_precedence": "autofallback only when normal atlas pixel is neutral and specular atlas pixel is zero",
-        "texture_reads": "up to four normal probes plus four optional near parallax probes on terrain; two map probes in LabPBR mode",
+        "texture_reads": "up to four sprite-local normal probes near the camera; two map probes in LabPBR mode",
         "water_lod_changes": False,
         "limits": "not actual per-texture LabPBR files; deliberately flat/black authored pixels indistinguishable from absent maps",
     }
