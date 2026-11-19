@@ -315,6 +315,11 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_render_compat import apply_render_compat
     report["render_compatibility"] = apply_render_compat(payload)
+    try:
+        from .patch_voxy_lite import apply_lite_voxy
+    except ImportError:
+        from patch_voxy_lite import apply_lite_voxy
+    report["lite_voxy"] = apply_lite_voxy(payload)
     report["limitations"] = [
         "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
         "Approximate voxel occlusion; thin/translucent block correctness pending",
