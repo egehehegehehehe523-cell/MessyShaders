@@ -19,12 +19,12 @@ The latest experimental ZIP adds a controlled import from the **Euphoria Patches
 **Important qualification:** Classification is broad; some modded entities grouped with luminous vanilla mobs are not themselves emissive. The technique works only for sources visible to the shadow-rendering pass, and cannot infer NBT data such as whether an ordinary arrow is burning. Flame effects are supported through their actual `entity_flame` render classification when Iris exposes that pass. This is not perfect Complementary r5.10 parity.
 
 Texture controls under **Messy Features**:
-- **Normal Map Strength:** generated per-texture normals from neighbouring albedo texels. Works on modded terrain/block textures automatically.
-- **Raised Texture Depth / Relief Depth:** inexpensive one-step sprite-clamped parallax effect. This shifts visible texture samples, **not the actual block geometry or silhouettes**. More depth increases distortion at grazing angles.
+- **Generated Normal Strength:** one conservative surface-bump control using texture-local luminance differences. Suppresses pixel-art noise and aggressive gradients; applies automatically to modded terrain/block textures.
 - **Coated Textures / Coating Strength:** a very inexpensive, nonreflective procedural micrograin coating over albedo. This is *not* a clearcoat specular layer. No extra texture sample is required for the coating itself.
-- Authored LabPBR maps retain precedence over generated normals and parallax in the shader. The coating is independently configurable.
+- **Removed:** the faulty one-step parallax/relief option and the displaced voxel-light sample, which could produce block-size patches and UV artifacts. Actual height/POM remains available only through separately supported LabPBR maps.
+- Authored LabPBR maps retain precedence over generated normals. The coating is independently configurable.
 
-All options are enabled initially for visual testing; **GPU cost is not yet measured**. To compare performance, disable Coated Textures, Raised Texture Depth, or Generated PBR independently and compare consistent scenes.
+The intensity tier of dynamic sources is now encoded in the same light-volume voxel ID: tiny XP orbs/spectral arrows receive weak illumination; blazes and flame sprites are brighter; placed blocks stay full strength. A soft energy gate reduces very weak long-distance spill. No extra 3D volume or diffusion pass has been added. **GPU cost and visual correctness still need in-game measurement.** Compare Coated Textures and Generated PBR independently.
 
 These implementations are independently written. No code from Complementary's restricted shader sources was copied; Euphoria's classifications are MIT licensed and their notice is bundled.
 
