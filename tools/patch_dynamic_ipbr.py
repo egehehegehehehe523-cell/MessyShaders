@@ -101,8 +101,28 @@ void messyWriteDynamicVoxel(vec3 worldRelative) {{
         index = uint(currentRenderedItemId - 26099);
     else
         index = messyEntityColorIndex(entityId);
-    if (index > 0u)
-        imageAtomicMax(messyEmitVolume, voxel, index);
+    if (index > 0u) {{
+        // Small emissive mobs and projectiles should not light the
+        // countryside like a full-strength block. Tier is 0..15.
+        uint tier = 6u;
+        if (currentRenderedItemId >= 26100 && currentRenderedItemId <= 26112)
+            tier = 7u;  // small dropped torch/lantern/item
+        else if (entityId == 26210 || entityId == 26220)
+            tier = 2u;  // XP orbs and spectral arrows
+        else if (entityId == 26208 || entityId == 26209)
+            tier = 3u;  // allay, vex
+        else if (entityId == 26201 || entityId == 26212 || entityId == 26214)
+            tier = 4u;  // glow squid and dim aquatic emitters
+        else if (entityId == 26200)
+            tier = 11u; // blaze
+        else if (entityId == 26221 || entityId == 10201)
+            tier = 9u;  // true fire sprite; not every arrow
+        else if (entityId == 26206)
+            tier = 6u;  // magma cube
+        else if (entityId == 26202)
+            tier = 7u;  // end crystal
+        imageAtomicMax(messyEmitVolume, voxel, (tier << 8u) | index);
+    }}
 #endif
 }}
 """
@@ -132,7 +152,7 @@ void messyWriteDynamicVoxel(vec3 worldRelative) {{
             "categories": list(ENTITY_COLORS),
             "limitations": ["Only objects drawn in shadow pass",
                             "Entity geometry, not entity centers, seeds nearby cells",
-                            "Voxel priority collision picks one palette index",
+                            "Voxel collisions select the strongest source tier then palette index",
                             "Fire on arbitrary entities requires dedicated detection"]}
 
 def replace_all_checked(files: dict[str, bytes], path: str, old: str, new: str, minimum: int = 1):
