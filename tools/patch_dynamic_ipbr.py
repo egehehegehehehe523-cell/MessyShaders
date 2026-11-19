@@ -50,8 +50,13 @@ vec3 messyGeneratedNormal(sampler2D albedo, vec2 uv, vec3 baseColor,
     float dx = dot(texture2D(albedo, uvX).rgb, vec3(0.2126, 0.7152, 0.0722)) - height;
     float dy = dot(texture2D(albedo, uvY).rgb, vec3(0.2126, 0.7152, 0.0722)) - height;
     textureVariation = clamp(3.0 * (abs(dx) + abs(dy)), 0.0, 1.0);
-    vec3 n = normalize(vec3(-dx * MESSY_IPBR_NORMAL_STRENGTH,
-                             -dy * MESSY_IPBR_NORMAL_STRENGTH, 1.0));
+    // Albedo luminance is not a height map. Suppress compression noise
+    // and harsh pixel edges before constructing a shallow bump normal.
+    vec2 gradient = sign(vec2(dx, dy)) *
+        max(abs(vec2(dx, dy)) - vec2(0.035), vec2(0.0));
+    gradient = clamp(gradient, vec2(-0.16), vec2(0.16));
+    float strength = MESSY_IPBR_NORMAL_STRENGTH * 0.24;
+    vec3 n = normalize(vec3(-gradient * strength, 1.0));
     return normalize(tangentFrame * n);
 }
 
@@ -183,40 +188,19 @@ def add_procedural_ipbr(files: dict[str, bytes]) -> dict:
         #if MATERIAL_GLOSS < 1
             vec3 bumpedNormal = vec3(1.0);"""
     patch_one(files, fragment, normal_anchor, normal_new)
-    # Generated height is evaluated from the original atlas texel before
-    # the regular albedo sample. This is a one-step parallax illusion: it
-    # does not move geometry or require a separately authored height map.
-    # At glancing angles it creates visible apparent relief while remaining
-    # much cheaper than E-Lite's multi-step POM.
-    patch_one(files, fragment,
-              "    pure_block_color = texture2D(tex, final_uv);",
-              """    #if defined MESSY_IPBR && !defined LabPBR && defined MESSY_IPBR_RELIEF && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
-        vec3 messyViewToCamera = normalize(-sub_position3);
-        vec3 messyViewTangent = vec3(
-            dot(messyViewToCamera, normalize(tbn[0])),
-            dot(messyViewToCamera, normalize(tbn[1])),
-            dot(messyViewToCamera, normalize(tbn[2])));
-        float messyHeight0 = dot(texture2D(tex, final_uv).rgb, vec3(0.2126, 0.7152, 0.0722));
-        vec2 messyReliefDelta = (0.5 - messyHeight0) *
-            messyViewTangent.xy / max(abs(messyViewTangent.z), 0.40) *
-            MESSY_IPBR_RELIEF_DEPTH * atlas_uv.zw;
-        vec2 messyAtlasTexel = 1.0 / max(vec2(atlasSize), vec2(16.0));
-        final_uv = messySafeUV(final_uv + messyReliefDelta, atlas_uv, messyAtlasTexel);
-    #endif
-    pure_block_color = texture2D(tex, final_uv);""")
-    # Let generated normals change how coloured voxel light shades the
-    # material, rather than only affecting direct sun/specular.
-    # One more 3D texture fetch, enabled only when generated PBR is on.
+    # Remove the incorrect luminance-to-parallax atlas shift and the
+    # extra, nearly block-wide voxel-light sampling offset. Use actual
+    # generated normals for small-scale local shading instead.
     patch_one(files, fragment,
               "        vec3 messyRGB = texture3D(messyRgbASampler, messyLightUVW).rgb;",
               """        vec3 messyRGB = texture3D(messyRgbASampler, messyLightUVW).rgb;
         #if defined MESSY_IPBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
-            vec3 messyWorldBump = normalize(mat3(gbufferModelViewInverse) * bumpedNormal);
-            vec3 messyOffsetUVW = clamp(
-                messyLightUVW + messyWorldBump * (0.75 / 48.0),
-                vec3(0.0), vec3(1.0));
-            vec3 messyBumpLight = texture3D(messyRgbASampler, messyOffsetUVW).rgb;
-            messyRGB = mix(messyRGB, messyBumpLight, 0.75);
+            vec3 messyN = normalize(bumpedNormal);
+            vec3 messyFlatN = normalize(flat_normal);
+            vec3 messyLightDir = normalize(vec3(0.35, 0.82, 0.40));
+            float messySurfaceRelief = clamp(
+                dot(messyN - messyFlatN, messyLightDir), -0.35, 0.35);
+            messyRGB *= (1.0 + 0.35 * messySurfaceRelief);
         #endif""")
     patch_one(files, fragment, "    // === PBR auxiliary",
               "    float messyTextureVariation = 0.0;\n    // === PBR auxiliary")
@@ -251,8 +235,7 @@ def add_procedural_ipbr(files: dict[str, bytes]) -> dict:
         "// Two extra atlas samples/fragment; disables automatically for LabPBR. \n"
         "#define MESSY_IPBR\n"
         "#define MESSY_IPBR_NORMAL_STRENGTH 2.5 // [0.0 1.0 1.5 2.5 4.0]\n"
-        "#define MESSY_IPBR_RELIEF\n"
-        "#define MESSY_IPBR_RELIEF_DEPTH 0.06 // [0.0 0.02 0.04 0.06 0.10]\n"
+
         "#define MESSY_DYNAMIC_EMITTERS\n"
         + config).encode("utf-8")
     # Small test menu: toggle expensive procedural sampling and entity draws
@@ -264,15 +247,14 @@ def add_procedural_ipbr(files: dict[str, bytes]) -> dict:
         "\n# MessyShaders experimental feature switches.\n"
         "screen.MESSY_FEATURES.columns=2\n"
         "screen.MESSY_FEATURES= MESSY_DYNAMIC_EMITTERS MESSY_IPBR "
-        "MESSY_IPBR_NORMAL_STRENGTH MESSY_IPBR_RELIEF "
-        "MESSY_IPBR_RELIEF_DEPTH <empty> PERF_IMPACT\n"
+        "MESSY_IPBR_NORMAL_STRENGTH <empty> PERF_IMPACT\n"
     )
     files[props_path] = props.encode("utf-8")
     return {
         "enabled_by_default": True,
         "terrain_block_textures": True,
-        "texture_fetches_extra": "two neighboring samples for normals, plus one albedo sample for parallax; one extra 3D RGB sample",
-        "single_step_parallax": True,
+        "texture_fetches_extra": "two neighboring albedo samples for conservative normals; no parallax or extra RGB-volume read",
+        "single_step_parallax": False,
         "labpbr_priority": True,
         "limitations": ["Procedural approximate normals/roughness, not full Complementary IPBR+ parity",
                         "No auto-metal detection from arbitrary textures",
