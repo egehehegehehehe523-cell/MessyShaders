@@ -327,6 +327,19 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_safe_materials import apply_safe_materials
     report["safe_materials"] = apply_safe_materials(payload)
+    # Early patch metadata describes what was *inserted*, not its eventual
+    # preprocessor state. The legacy preview is later disabled on purpose.
+    report["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"] = False
+    report["dynamic_ipbr"]["procedural_pbr"]["status"] = "legacy preview disabled by safe_materials"
+    report["temporal_normals"]["generated_normals"]["status"] = "legacy 0.60-1.50x relief disabled"
+    # Feed subtle atlas-derived normals and roughness into the original
+    # E-Lite solid-material shading path. This does not reactivate the old
+    # high-contrast IPBR preview or modify near/LOD water shaders.
+    try:
+        from .patch_native_auto_materials import apply_native_auto_materials
+    except ImportError:
+        from patch_native_auto_materials import apply_native_auto_materials
+    report["native_auto_materials"] = apply_native_auto_materials(payload)
     try:
         from .patch_voxy_lite import apply_lite_voxy
     except ImportError:

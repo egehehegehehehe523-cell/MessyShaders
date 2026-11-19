@@ -88,7 +88,7 @@ class FastRgbTests(unittest.TestCase):
             zsource = root / "source.zip"
             zout = root / "result.zip"
             src = {
-                "shaders/shaders.properties": "# test\n#ifdef SHADOW_ENTITIES\n    shadowEntities = true\n#else\n    shadowEntities = false\n#endif\nuniform.float.pale_garden = smooth(if(in(biome, BIOME_PALE_GARDEN), 1, 0), 60, 60)\n",
+                "shaders/shaders.properties": "# test\n#ifdef SHADOW_ENTITIES\n    shadowEntities = true\n#else\n    shadowEntities = false\n#endif\nuniform.float.pale_garden = smooth(if(in(biome, BIOME_PALE_GARDEN), 1, 0), 60, 60)\nsliders = MATERIAL_GLOSS\n",
                 "shaders/src/light_vertex.glsl":
                     "start\n#ifdef DYN_HAND_LIGHT\nold\n#endif\n"
                     "#if defined GBUFFER_HAND\nend\n",
@@ -122,6 +122,16 @@ class FastRgbTests(unittest.TestCase):
                     '            vec3 bumpedNormal = vec3(1.0);\n'
                     '        #else\n            vec3 bumpedNormal = flat_normal;\n        #endif\n    #endif\n'
                     '    #if !defined NETHER && defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
+                    '        float shadow_c_relief;\n'
+                    '        if(foliageData.x < 0.3) {  \n'
+                    '            vec3 shadowLightDir = mix(-sunPosition, sunPosition, light_mix) * 0.01;\n'
+                    '            float diffuseRelief = clamp(dot(bumpedNormal, shadowLightDir), 0.0, 1.0);\n'
+                    '            shadow_c_relief = (isGrass < 0.5) ? sqrt(directLight2 * diffuseRelief) : directLight2;\n'
+                    '        } else {\n'
+                    '            shadow_c_relief = directLight2;\n'
+                    '        }\n'
+                    '    #else\n'
+                    '        float shadow_c_relief = directLight2;\n'
                     '    #endif\n'
                     '            float final_gloss_power = glossParms.g;\n'
                     '            float block_luma2 = pow(block_luma * glossParms.b, glossParms.a);\n'
@@ -230,6 +240,26 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("#ifndef MESSY_UNSAFE_MATERIAL_PREVIEW", config)
                 self.assertGreater(config.index("#undef MESSY_IPBR"),
                                    config.index("// #define MESSY_IPBR"))
+                self.assertIn("#define MESSY_AUTO_MATERIALS\n", config)
+                self.assertIn("#define MESSY_AUTO_NORMAL_STRENGTH 0.75", config)
+                self.assertGreater(config.index("#define MESSY_AUTO_MATERIALS"),
+                                   config.index("#undef MESSY_IPBR"))
+                fragment = z.read("shaders/common/solid_blocks_fragment.glsl").decode()
+                vertex = z.read("shaders/common/solid_blocks_vertex.glsl").decode()
+                auto_lib = z.read("shaders/lib/messy_procedural_pbr.glsl").decode()
+                self.assertIn("#elif defined MESSY_AUTO_MATERIALS && !defined LabPBR", fragment)
+                self.assertIn("bumpedNormal = messyAutoBumpedNormal(", fragment)
+                self.assertIn("currentRoughness = messyAutoMaterialRoughness(", fragment)
+                self.assertIn("defined LabPBR || defined MESSY_IPBR || defined MESSY_AUTO_MATERIALS", vertex)
+                self.assertIn("texture2D(albedo, rightUV)", auto_lib)
+                self.assertIn("1.0 - smoothstep(0.17, 0.39, contrast)", auto_lib)
+                self.assertIn("distanceToCamera > 48.0", auto_lib)
+                self.assertIn("Automatic Block Materials", z.read("shaders/lang/en_US.lang").decode())
+                props = z.read("shaders/shaders.properties").decode()
+                self.assertIn("MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH", props)
+                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH ", props)
+                self.assertFalse(info["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"])
+                self.assertFalse(info["native_auto_materials"]["water_lod_changes"])
                 self.assertIn("max_propagation_reach", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("world_rgb", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("image.messyEmitVolume",
