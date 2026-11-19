@@ -2,8 +2,9 @@
 
 Experimental: re-voxelizes the nearby 48^3 area during the existing shadow
 pass, then performs six low-resolution 6-neighbour propagation steps before
-the gbuffers render. Variable guarded jumps cover roughly sixteen blocks
-without adding dispatches. The RGB images use normalized 8-bit storage;
+the gbuffers render. The first one-block step is fused into source decoding:
+one less full-volume dispatch and intermediate image round trip. Variable
+guarded jumps cover roughly sixteen blocks. RGB images use 8-bit storage;
 the source palette and propagated intensities are bounded to [0, 1].
 This gives placed block light surface spill and basic blocking by full blocks,
 but it is NOT cached, physically exact or GPU benchmarked.
@@ -91,7 +92,11 @@ def seed_source() -> str:
         "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;",
         "const ivec3 workGroups = ivec3(6, 6, 48);",
         "layout(r32ui) uniform readonly uimage3D messyEmitVolume;",
-        "layout(rgba8) uniform writeonly image3D messyRgbA;",
+        "layout(r32ui) uniform readonly uimage3D messyOpaqueVolume;",
+        # The first propagation step previously wrote B after a separate
+        # palette-decoding pass A. B is now written directly; the remaining
+        # five steps alternate B -> A -> B -> A -> B -> A as before.
+        "layout(rgba8) uniform writeonly image3D messyRgbB;",
         "vec3 messyPalette(uint id) {",
     ]
     for i, c in enumerate(COLORS, 1):
@@ -99,13 +104,29 @@ def seed_source() -> str:
     lines += [
         "    return vec3(0.0);",
         "}",
+        "vec3 messySeedAt(ivec3 p) {",
+        "    if (any(lessThan(p, ivec3(0))) ||",
+        "        any(greaterThanEqual(p, ivec3(48)))) return vec3(0.0);",
+        "    uint messyPackedVoxel = imageLoad(messyEmitVolume, p).r;",
+        "    if (messyPackedVoxel == 0u) return vec3(0.0);",
+        "    uint idx = messyPackedVoxel & 255u;",
+        "    float lightScale = float((messyPackedVoxel >> 8u) & 255u) / 255.0;",
+        "    return messyPalette(idx) * lightScale;",
+        "}",
         "void main() {",
         "    ivec3 p = ivec3(gl_GlobalInvocationID);",
         "    if (any(greaterThanEqual(p, ivec3(48)))) return;",
-        "    uint messyPackedVoxel = imageLoad(messyEmitVolume, p).r;",
-        "    uint idx = messyPackedVoxel & 255u;",
-        "    float lightScale = float((messyPackedVoxel >> 8u) & 255u) / 255.0;",
-        "    imageStore(messyRgbA, p, vec4(messyPalette(idx) * lightScale, 1.0));",
+        "    vec3 center = messySeedAt(p);",
+        "    if (imageLoad(messyOpaqueVolume, p).r != 0u) {",
+        "        imageStore(messyRgbB, p, vec4(center, 1.0));",
+        "        return;",
+        "    }",
+        "    vec3 neighbor = max(",
+        "        max(messySeedAt(p + ivec3(1,0,0)), messySeedAt(p - ivec3(1,0,0))),",
+        "        max(messySeedAt(p + ivec3(0,1,0)), messySeedAt(p - ivec3(0,1,0))));",
+        "    neighbor = max(neighbor, messySeedAt(p + ivec3(0,0,1)));",
+        "    neighbor = max(neighbor, messySeedAt(p - ivec3(0,0,1)));",
+        "    imageStore(messyRgbB, p, vec4(max(center, neighbor * 0.88), 1.0));",
         "}",
         "",
     ]
@@ -248,14 +269,16 @@ image.messyRgbB = messyRgbBSampler rgba rgba8 float true false 48 48 48
     for dimension in ("world0", "world-1", "world1"):
         prefix = f"shaders/{dimension}/prepare"
         put(pack, prefix + ".csh", seed_source())
-        for index in range(STEPS):
-            suffix = chr(ord("a") + index)
-            source_field = "messyRgbA" if index % 2 == 0 else "messyRgbB"
-            target_field = "messyRgbB" if index % 2 == 0 else "messyRgbA"
+        # Propagation step 0 (stride=1) was fused with palette decoding into
+        # prepare.csh. All remaining passes use the same guarded diffusion.
+        for index in range(1, STEPS):
+            suffix = chr(ord("a") + index - 1)
+            source_field = "messyRgbB" if index % 2 == 1 else "messyRgbA"
+            target_field = "messyRgbA" if index % 2 == 1 else "messyRgbB"
             put(pack, f"{prefix}_{suffix}.csh",
                 diffusion_source(source_field, target_field, PROPAGATION_STRIDES[index]))
     return {
-        "mode": "Iris 48^3 voxel emission + 6 passes, guarded 16-block propagation reach, RGBA8",
+        "mode": "Iris 48^3 voxel emission + 5 standalone passes (first propagation fused with seed), guarded 16-block reach, RGBA8",
         "max_propagation_reach": sum(PROPAGATION_STRIDES),
         "gpu_measured": False,
         "irradiance_occlusion": "basic block-based voxel occupancy; not per-face exact",

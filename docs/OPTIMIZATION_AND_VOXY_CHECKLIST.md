@@ -6,8 +6,12 @@ This build keeps E-Lite's water/depth paths and working generated-normal
 lighting unchanged by default. It trades RGB precision and more precise
 long-range occupancy checks for a longer coloured-light range:
 
-- RGB propagation: six existing compute passes, with strides `1, 1, 2, 3, 4, 5`
-  (16-block maximum path instead of the original 10). Every intervening cell is tested on
+- RGB propagation: **six mathematical propagation steps in five standalone
+  passes**, with strides `1, 1, 2, 3, 4, 5`. Step one is fused with the
+  initial palette/seed decode, eliminating a whole 48³ intermediate pass and
+  a dispatch while preserving the same light spread. The output remains A,
+  so the temporal renderer and Voxy samplers need no changes.
+  The maximum path is 16 blocks instead of the original 10. Every intervening cell is tested on
   a multi-block jump. Empty light candidates skip those occupancy lookups.
 - Four 48³ RGB volumes: `RGBA8` in place of `RGBA16F`. Source intensities are
   bounded to `[0, 1]`. This changes the light-field allocation from 3,538,944
@@ -22,12 +26,32 @@ long-range occupancy checks for a longer coloured-light range:
   to 56 blocks, preserving the last working normal appearance. A value of
   24/32/40 reduces the terrain area paying for four extra albedo samples per
   pixel. This is a *quality/performance* choice, not an automatic benchmark.
-- Moving light sources now use the rendered entity/item transform origin
-  instead of one atomic write per animated vertex cell. Each vertex writes
-  the **same** eight-corner normalized sub-voxel emission footprint, so light
-  can slide across the world-space lattice. It remains a shadow-pass-only
-  approximation: entity models with different local part transforms may still
-  disagree about their origin, and there is no object-independent source list.
+- Moving lights sample the **actual shadow-transformed entity/item vertices**
+  and distribute each source across eight neighboring voxels. This fixes the
+  previous matrix-origin regression, which could place light at the player.
+  Each vertex has its own continuous world position: larger or heavily animated
+  entities still produce an approximate surface-shaped glow, not a single
+  stable entity-wide source. That requires positions supplied by a helper or
+  another supported entity-position API; shader entity IDs alone are not enough.
+- Moving emitter sub-voxel corner writes below `8/255` energy are suppressed
+  before the atomic operation. Those contributions cannot pass the existing
+  shared RGB energy cutoff, so they consume GPU writes without visible light.
+
+### What stock E-Lite actually limits
+
+- E-Lite 5.1.3 does **not** contain a true coloured voxel-light propagation
+  volume; this is a MessyShaders addition. Its regular placed light is vanilla
+  block light (levels 0–15, up to ~15 blocks), optionally tinted in the shader.
+- E-Lite's **Fake dynamic light** for recognised held items uses
+  `max(1 - gl_FogFragCoord * 0.0666 - itemOffset, 0)`, reaching zero at about
+  15 blocks at best, or sooner for dimmer item classes. It is a camera-based
+  approximation, not RGB world-space lighting from arbitrary moving entities.
+- Our RGB contribution currently travels up to 16 blocks from a source **but**
+  is computed only inside a camera-centred 48³ field (roughly ±24 blocks per
+  axis, with a further 4-voxel edge fade). Distant lamps outside that field
+  cannot illuminate a nearby wall with our RGB path, and a source near its edge
+  has its outward spill clipped. A wider field would raise compute cost;
+  increasing propagation strides alone cannot solve this.
 
 **Unverified:** FPS, GPU milliseconds, camera-motion banding from RGBA8,
 moving-source origin consistency across custom renderers, wall occlusion on

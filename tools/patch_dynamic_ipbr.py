@@ -92,7 +92,7 @@ uint messyEntityColorIndex(int entity) {{
     return 0u;
 }}
 
-void messyWriteDynamicVoxel() {{
+void messyWriteDynamicVoxel(vec3 vertexWorldRelative) {{
 #ifdef MESSY_DYNAMIC_EMITTERS
     // Classify before doing the matrix work. Ordinary terrain pays nothing.
     uint index = 0u;
@@ -120,13 +120,16 @@ void messyWriteDynamicVoxel() {{
             tier = 6u;  // magma cube
         else if (entityId == 26202)
             tier = 7u;  // end crystal
-        // gl_ModelViewMatrix contains the current entity/item transform.
-        // Its local origin moves continuously with the object, unlike a
-        // vertex position (which walks around the animated mesh). Convert
-        // that origin to the same camera-relative coordinates as blocks.
-        vec3 modelOrigin = (shadowModelViewInverse * gl_ModelViewMatrix *
-                            vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-        vec3 gridPosition = modelOrigin + fract(cameraPosition) + vec3(23.5);
+        // IMPORTANT: in the Iris shadow pass, the model-view matrix does
+        // not reliably contain an entity translation. Multiplying it by a
+        // zero local-space origin can resolve to *the camera*, leaving a
+        // moving light attached to the player. Use the same transformed
+        // vertex position E-Lite already uses for real shadow geometry.
+        // This lights the object's rendered surface, not an invented pivot.
+        // A true one-source-per-entity centre needs entity positions from a
+        // dedicated source API; Iris entityId alone is only a classification.
+        vec3 gridPosition = vertexWorldRelative +
+                            fract(cameraPosition) + vec3(23.5);
         ivec3 lowerCorner = ivec3(floor(gridPosition));
         vec3 blend = fract(gridPosition);
 
@@ -147,7 +150,10 @@ void messyWriteDynamicVoxel() {{
             float contribution = factors.x * factors.y * factors.z / samplingNorm;
             float light = clamp((float(tier) / 15.0) * contribution, 0.0, 1.0);
             uint quantized = uint(floor(light * 255.0 + 0.5));
-            if (quantized > 0u)
+            // Less than 8/255 can never survive the RGB sampling energy
+            // gate, even at the emitter. Skip these tiny atomic writes,
+            // which occur frequently at the outer sub-voxel corners.
+            if (quantized >= 8u)
                 imageAtomicMax(messyEmitVolume, voxel, (quantized << 8u) | index);
         }}
     }}
@@ -160,7 +166,7 @@ void messyWriteDynamicVoxel() {{
     patch_one(files,path,
               '    messyWriteVoxel(positions.xyz + at_midBlock.xyz / 64.0, int(mc_Entity.x));',
               '    messyWriteVoxel(positions.xyz + at_midBlock.xyz / 64.0, int(mc_Entity.x));\n'
-              '    messyWriteDynamicVoxel();')
+              '    messyWriteDynamicVoxel(positions.xyz);')
 
     # Existing E-Lite IDs are preserved, notably the lightning classification.
     entity_path = "shaders/entity.properties"
@@ -178,10 +184,11 @@ void messyWriteDynamicVoxel() {{
     return {"enabled_by_default": True,
             "source": "Iris currentRenderedItemId + entityId in shadow pass",
             "categories": list(ENTITY_COLORS),
-            "subvoxel_sources": "matrix-derived moving origin, trilinear eight-corner atomic splat",
+            "subvoxel_sources": "transformed shadow-vertex position, trilinear eight-corner atomic splat",
             "limitations": ["Only objects drawn in shadow pass",
-                            "Per-part transforms may not share an entity-wide origin",
-                            "Multiple source vertices still repeat the same idempotent atomics",
+                            "Per-vertex emission follows visible geometry, not an entity-wide center",
+                            "Large animated models may have an extended illumination footprint",
+                            "Multiple source vertices still repeat atomic writes",
                             "Voxel collisions select the strongest source tier then palette index",
                             "Fire on arbitrary entities requires dedicated detection"]}
 

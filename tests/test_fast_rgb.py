@@ -6,7 +6,7 @@ import unittest
 from zipfile import ZipFile
 
 from tools.patch_coverage_coating import parse_entities, expand_entities
-from tools.patch_world_rgb import PROPAGATION_STRIDES, diffusion_source
+from tools.patch_world_rgb import PROPAGATION_STRIDES, diffusion_source, seed_source
 from tools.build_fast_rgb import (
     SOURCE, read_source, apply_overrides, build, emitter_entries, parse_properties,
     rewrite_property_table, BLOCK_IDS, ITEM_IDS,
@@ -74,6 +74,46 @@ class FastRgbTests(unittest.TestCase):
                 for z in range(-16, 17)
                 if abs(x) + abs(y) + abs(z) <= 16}
         self.assertGreater(len(active & near) / len(near), 0.99)
+
+    def test_fused_seed_decoding_matches_first_one_cell_diffusion(self):
+        # The first propagation step now runs while unpacking palette IDs,
+        # eliminating a full 48^3 pass. Verify its math matches the old
+        # seed-then-stride-1 path, including a solid cell with a light inside.
+        direct = {(0, 0, 0): (1.0, 0.2, 0.1),
+                  (2, 0, 0): (0.1, 0.9, 0.8)}
+        opaque = {(0, 0, 0), (1, 1, 0)}
+        axes = ((1, 0, 0), (-1, 0, 0), (0, 1, 0),
+                (0, -1, 0), (0, 0, 1), (0, 0, -1))
+        def at(pos):
+            return direct.get(pos, (0.0, 0.0, 0.0))
+        def old_step(pos):
+            center = at(pos)
+            if pos in opaque:
+                return center
+            neighbors = [at(tuple(a + step for a, step in zip(pos, direction)))
+                         for direction in axes]
+            return tuple(max(center[i], max(n[i] for n in neighbors) * 0.88)
+                         for i in range(3))
+        def fused_step(pos):
+            # Sample the packed source directly rather than writing and
+            # rereading a separate seed volume.
+            light = list(at(pos))
+            if pos not in opaque:
+                for delta in axes:
+                    neighbor = at(tuple(v + d for v, d in zip(pos, delta)))
+                    light = [max(a, b * 0.88) for a, b in zip(light, neighbor)]
+            return tuple(light)
+        for x in range(-1, 4):
+            for y in range(-1, 2):
+                for z in range(-1, 2):
+                    pos = (x, y, z)
+                    self.assertEqual(old_step(pos), fused_step(pos))
+        fused = seed_source()
+        self.assertIn("layout(rgba8) uniform writeonly image3D messyRgbB;", fused)
+        self.assertIn("vec3 center = messySeedAt(p);", fused)
+        self.assertIn("if (imageLoad(messyOpaqueVolume, p).r != 0u)", fused)
+        self.assertIn("vec4(max(center, neighbor * 0.88), 1.0)", fused)
+        self.assertNotIn("imageStore(messyRgbA", fused)
 
     def test_multiline_properties(self):
         table = parse_properties("block.21004 = mod:red_lamp \\\n mod:red_torch \\\n mod:red_candle\n# comment\nblock.22 = dirt\n")
@@ -277,6 +317,14 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("Generated Normal Strength", z.read("shaders/lang/en_US.lang").decode())
                 self.assertNotIn("Raised Texture Depth", z.read("shaders/lang/en_US.lang").decode())
                 seed = z.read("shaders/world0/prepare.csh").decode()
+                self.assertIn("messyRgbB", seed)
+                # Only five standalone propagation passes remain, while the
+                # actual six strides and 16-block reach are unchanged.
+                for dim in ("world0", "world-1", "world1"):
+                    self.assertNotIn(f"shaders/{dim}/prepare_f.csh", z.namelist())
+                    last = z.read(f"shaders/{dim}/prepare_e.csh").decode()
+                    self.assertIn("uniform readonly image3D messyRgbB", last)
+                    self.assertIn("uniform writeonly image3D messyRgbA", last)
                 self.assertIn("uint messyPackedVoxel = imageLoad(messyEmitVolume, p).r", seed)
                 self.assertIn("uint idx = messyPackedVoxel & 255u;", seed)
                 self.assertIn("(messyPackedVoxel >> 8u)", seed)
@@ -295,12 +343,18 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("messyWriteDynamicVoxel", z.read("shaders/common/shadow_vertex.glsl").decode())
                 shadow = z.read("shaders/common/shadow_vertex.glsl").decode()
                 voxel_source = z.read("shaders/lib/messy_voxel_vertex.glsl").decode()
-                self.assertIn("messyWriteDynamicVoxel();", shadow)
-                self.assertIn("shadowModelViewInverse * gl_ModelViewMatrix", voxel_source)
+                self.assertIn("messyWriteDynamicVoxel(positions.xyz);", shadow)
+                # On Iris, an entity's local origin can be the camera: the
+                # already transformed vertex is the reliable world position.
+                self.assertIn("void messyWriteDynamicVoxel(vec3 vertexWorldRelative)", voxel_source)
+                self.assertIn("vec3 gridPosition = vertexWorldRelative +", voxel_source)
+                self.assertNotIn("shadowModelViewInverse * gl_ModelViewMatrix", voxel_source)
+                self.assertNotIn("vec3 modelOrigin =", voxel_source)
                 self.assertIn("for (int corner = 0; corner < 8; ++corner)", voxel_source)
                 self.assertIn("float samplingNorm = axisNorm.x * axisNorm.y * axisNorm.z;", voxel_source)
                 self.assertIn("(quantized << 8u) | index", voxel_source)
-                self.assertNotIn("messyWriteDynamicVoxel(positions.xyz)", shadow)
+                self.assertIn("if (quantized >= 8u)", voxel_source)
+                self.assertNotIn("messyWriteDynamicVoxel();", shadow)
                 self.assertIn("MESSY_IPBR", z.read("shaders/lib/config.glsl").decode())
                 self.assertIn("messyGeneratedNormal", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 config = z.read("shaders/lib/config.glsl").decode()
@@ -440,7 +494,7 @@ class FastRgbTests(unittest.TestCase):
                               z.read("shaders/colorwheel.properties").decode())
                 self.assertEqual(len([x for x in z.namelist()
                                       if x.startswith("shaders/world0/prepare")
-                                      and x.endswith(".csh")]), 8)
+                                      and x.endswith(".csh")]), 7)
                 self.assertEqual(json.loads(z.read("MESSYSHADERS_BUILD.json"))["euphoria_mit_catalog"], False)
 
 if __name__ == "__main__":

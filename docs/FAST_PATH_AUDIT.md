@@ -10,6 +10,10 @@
 
 **Luxium 2.8.4 pre-alpha:** targets Minecraft 1.20.1 Forge/Fabric and explicitly blocks Iris/Oculus. Its independently observed ideas include cached local-light and shadow atlases, dirty section invalidation, a screen-tiled local-light list, bounded dynamic shadow updates and Kawase-style bloom. Those may be reusable **conceptually** only, and their speedup is unproven for our scenes. Source is decompiled and under a proprietary custom licence; do not copy or redistribute.
 
+The prioritized division between shader-only changes, completed fast paths,
+and options requiring a separate helper is consolidated in
+[`LUXIUM_PORTABLE_FAST_PATHS.md`](LUXIUM_PORTABLE_FAST_PATHS.md).
+
 **Additional reference:** Just Colored Lighting advertises cheap colored block/dynamic lights, automatic mod-light detection and PBR. Investigate its techniques and license; compare actual GPU time rather than accepting marketing claims.
 
 ## Proposed technical comparisons

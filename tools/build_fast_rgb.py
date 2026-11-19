@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Build the first *experimental* MessyShaders lighting branch.
+"""Build the experimental E-Lite-based MessyShaders RGB shader pack.
 
-Repackages the supplied LGPL E-Lite 5.1.3 shader archive, adding a cheap,
-vertex-based RGB held-item light and colored emitter surfaces.  This is NOT
-voxel-propagated RGB light, source occlusion, IntegratedPBR+, or a Luxium port.
-Euphoria's optional MIT-licensed classification data is processed at build
-time.  No Complementary, Euphoria shader or Luxium renderer code is copied.
+Repackages the supplied LGPL E-Lite 5.1.3 shader archive with a bounded,
+experimental 48^3 RGB world-light volume and source classification.
+Occlusion is only a coarse block approximation and is NOT full physically
+correct global lighting, Complementary IntegratedPBR+, or a Luxium port.
+Euphoria's optional MIT-licensed property tables are processed at build time.
+No Complementary, Euphoria shader, or Luxium renderer code is copied.
 """
 from __future__ import annotations
 

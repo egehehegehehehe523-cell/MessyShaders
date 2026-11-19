@@ -21,7 +21,7 @@ def temporal_compute()->str:
     return """#version 430
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 const ivec3 workGroups = ivec3(6, 6, 48);
-// Current fully propagated lighting from the existing six iterations.
+// Current fully propagated lighting after fused seed+step0 and five iterations.
 layout(rgba8) uniform readonly image3D messyRgbA;
 // Two NON-clearing history images. Never read and write the same one.
 layout(rgba8) uniform image3D messyRgbHistoryA;
@@ -133,7 +133,7 @@ image.messyRgbHistoryB = messyRgbHistoryBSampler rgba rgba8 float false false 48
         messyRGB *= smoothstep(0.045, 0.15, messyEnergy);
 """, "")
     return {"technique":"camera-cell reprojection; dual persistent 48^3 RGBA8 history images",
-            "current_passes":8,
+            "current_passes":7,
             "additional_compute_passes":1,
             "additional_vram_bytes":2*SIZE**3*4,
             "measured_gpu_cost":False,
