@@ -135,29 +135,24 @@ image.messyRgbHistoryB = messyRgbHistoryBSampler rgba rgba16f float false false 
 def fix_normals(pack:dict[str,bytes])->dict:
     # Surface normals were used for E-Lite's optional glossy path, but
     # diffuse/ambient stayed effectively flat under normal strength changes.
-    # Make generated normals affect existing diffuse lighting *without*
-    # additional texture samples, camera-fixed fake directional light or
-    # parallax UV displacement.
+    # Make generated normals affect the existing directional irradiance,
+    # rather than scaling ambient/emissive light after it was combined.
+    # No additional texture reads, fake directional lights or UV parallax.
     path="shaders/common/solid_blocks_fragment.glsl"
-    anchor="    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);"
+    anchor="""    #if defined LabPBR && defined POM && defined POM_SHADOW && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)"""
     shade="""    #if defined MESSY_IPBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)
-        // Only influence the directional surface lighting. Multiplying
-        // ALL irradiance amplified per-pixel noise in ambient light, even at
-        // night, and created the previously reported wrong-looking blocks.
-        // Normals and sun/moon directions are both in view space.
-        vec3 messyLightDirection = normalize(
-            light_mix >= 0.5 ? sunPosition : moonPosition);
-        vec3 messyNormal = normalize(bumpedNormal);
-        vec3 messyOriginalNormal = normalize(flat_normal);
-        float messyNewDiffuse = max(0.0, dot(messyNormal, messyLightDirection));
-        float messyOriginalDiffuse = max(0.0, dot(messyOriginalNormal, messyLightDirection));
-        float messyDelta = clamp(messyNewDiffuse - messyOriginalDiffuse, -0.20, 0.20);
-        float messyDirectMask = clamp(visible_sky * max(0.0, directLight2), 0.0, 1.0);
-        // This limits the maximum light-level change to +/- 12 percent.
-        // Stronger "raised" relief requires actual authored height maps.
-        float messyDiffuseFactor = clamp(
-            1.0 + messyDelta * messyDirectMask * 0.60, 0.88, 1.12);
-        real_light *= messyDiffuseFactor;
+        // Modify sunlight/moonlight, not RGB emitters or ambient fill.
+        // Both normals and the light direction are in view space. Restrict
+        // relief on foliage, whose atlas is often a cutout rather than stone.
+        if (foliageData.x < 0.3 && isGrass < 0.5) {
+            vec3 messyLightDirection = normalize(
+                light_mix >= 0.5 ? sunPosition : moonPosition);
+            float messyNewDiffuse = max(0.0, dot(normalize(bumpedNormal), messyLightDirection));
+            float messyFlatDiffuse = max(0.0, dot(normalize(flat_normal), messyLightDirection));
+            float messyDiffuseFactor = clamp(
+                1.0 + 2.5 * (messyNewDiffuse - messyFlatDiffuse), 0.60, 1.50);
+            shadow_c_relief = directLight2 * messyDiffuseFactor;
+        }
     #endif
 """
     replace_one(pack,path,anchor,shade+anchor)
@@ -179,7 +174,7 @@ def fix_normals(pack:dict[str,bytes])->dict:
     replace_one(pack,path,
                 "        vec3 gloss;\n        if(block_type != 1.0){",
                 "        vec3 gloss = vec3(0.0);\n        if(block_type != 1.0){")
-    return {"visual_shading":"generated normal changes direct-lit RGB by at most 12% while preserving ambient brightness",
+    return {"visual_shading":"generated normal modulates directional irradiance by 0.6-1.5x; ambient and RGB unaffected",
             "extra_texture_reads":0,
             "removed_camera_fixed_fake_direction":True,
             "labpbr_priority_retained":True}

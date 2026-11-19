@@ -316,6 +316,16 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
         from patch_render_compat import apply_render_compat
     report["render_compatibility"] = apply_render_compat(payload)
     try:
+        from .patch_water_lod import apply_water_lod
+    except ImportError:
+        from patch_water_lod import apply_water_lod
+    report["water_lod"] = apply_water_lod(payload)
+    try:
+        from .patch_mc1211_compat import apply_mc1211_compat
+    except ImportError:
+        from patch_mc1211_compat import apply_mc1211_compat
+    report["mc1211_compat"] = apply_mc1211_compat(payload)
+    try:
         from .patch_voxy_lite import apply_lite_voxy
     except ImportError:
         from patch_voxy_lite import apply_lite_voxy

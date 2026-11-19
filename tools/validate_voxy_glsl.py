@@ -9,11 +9,28 @@ from pathlib import Path
 from zipfile import ZipFile
 import sys
 
+
+def extract_function(source: str, signature: str) -> str:
+    """Extract one standalone GLSL function to compile with injected uniforms."""
+    start = source.index(signature)
+    opening = source.index("{", start)
+    nesting = 1
+    pos = opening + 1
+    while nesting:
+        if pos >= len(source):
+            raise ValueError(f"Unterminated GLSL function {signature}")
+        nesting += (source[pos] == "{") - (source[pos] == "}")
+        pos += 1
+    return source[start:pos]
+
 def main():
     pack, output = map(Path, sys.argv[1:3])
     output.mkdir(parents=True, exist_ok=True)
     with ZipFile(pack) as z:
         lib = z.read("shaders/lib/messy_rgb_sample.glsl").decode("utf8")
+        water = z.read("shaders/lib/water_voxy.glsl").decode("utf8")
+        water_json = z.read("shaders/common/voxy.json").decode("utf8")
+        assert '"vxDepthTexOpaque": "sampler2D"' in water_json
         names = set(z.namelist())
         for dim in ("world0", "world-1", "world1", ""):
             prefix = f"shaders/{dim}/" if dim else "shaders/"
@@ -36,6 +53,34 @@ def main():
         filename=output/f"voxy_{tag.lower()}.frag"
         filename.write_text(source,encoding="utf8")
         print(filename)
+
+    # Compile the actual E-Lite functions changed for Voxy's water depth and
+    # normal continuity. Without this test, a missing sampler or an out-of-
+    # scope variable in a global helper could pass all G-buffer smoke checks.
+    water_source = (
+        "#version 430 core\n"
+        "#define texture2D texture\n"
+        "#define WATER_ABSORPTION 0.05\n"
+        "#define WATER_TURBULENCE 0.8\n"
+        "uniform sampler2D vxDepthTexOpaque, gaux1, noisetex;\n"
+        "uniform float pixelSizeX, pixelSizeY, frameTimeCounter, rainStrength;\n"
+        "uniform int isEyeInWater;\n"
+        + "\n".join(extract_function(water, signature) for signature in (
+            "vec3 normal_waves_voxy(",
+            "vec3 refraction_voxy(",
+            "vec3 get_normals_voxy(",
+        ))
+        + "\nlayout(location = 0) out vec4 color;\n"
+        "void main() {\n"
+        " vec3 bump = normal_waves_voxy(vec3(1.0));\n"
+        " vec3 n = get_normals_voxy(bump, vec3(0.0, 1.0, 1.0),\n"
+        "    vec3(1,0,0), vec3(0,0,1), vec3(0,1,0));\n"
+        " color = vec4(refraction_voxy(n, vec3(0.4), bump), 1.0);\n"
+        "}\n"
+    )
+    target = output / "voxy_water_depth.frag"
+    target.write_text(water_source, encoding="utf8")
+    print(target)
 
 if __name__ == "__main__":
     main()

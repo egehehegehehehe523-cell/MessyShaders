@@ -72,7 +72,7 @@ class FastRgbTests(unittest.TestCase):
             zsource = root / "source.zip"
             zout = root / "result.zip"
             src = {
-                "shaders/shaders.properties": "# test\n#ifdef SHADOW_ENTITIES\n    shadowEntities = true\n#else\n    shadowEntities = false\n#endif\n",
+                "shaders/shaders.properties": "# test\n#ifdef SHADOW_ENTITIES\n    shadowEntities = true\n#else\n    shadowEntities = false\n#endif\nuniform.float.pale_garden = smooth(if(in(biome, BIOME_PALE_GARDEN), 1, 0), 60, 60)\n",
                 "shaders/src/light_vertex.glsl":
                     "start\n#ifdef DYN_HAND_LIGHT\nold\n#endif\n"
                     "#if defined GBUFFER_HAND\nend\n",
@@ -111,6 +111,7 @@ class FastRgbTests(unittest.TestCase):
                     '            float block_luma2 = pow(block_luma * glossParms.b, glossParms.a);\n'
                     '            float isMetal = 0.0;\n'
                     '            f0_val = reflex_index2;\n'
+                    '    #if defined LabPBR && defined POM && defined POM_SHADOW && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n'
                     '        vec3 gloss;\n        if(block_type != 1.0){\n'
                     '        }\n'
                     '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
@@ -121,11 +122,25 @@ class FastRgbTests(unittest.TestCase):
                 "shaders/common/water_voxy_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
                     '    vec4 worldPos = vxModelViewInv * viewSpacePos4D;\n'
+                    '        vec3 waterNormalBase = normal_waves_voxy(worldposition.xzy);\n'
                     '    realLight = vec3(0.0) +\n                candleColor;\n'
                     '    realLight = vec3(0.0) +\n                candleColor;\n'
                     '    realLight = vec3(0.0) +\n                candleColor;\n',
                 "shaders/common/voxy.json":
-                    '    "endFlashIntensity",\n"frameTimeCounter",\n"noisetex": "sampler2D",\n',
+                    '    "endFlashIntensity",\n"frameTimeCounter",\n"noisetex": "sampler2D",\n'
+                    '    "vxDepthTexTrans": "sampler2D"\n',
+                "shaders/common/water_blocks_fragment.glsl":
+                    '    uniform sampler2D vxDepthTexTrans;\n'
+                    '        vec3 water_normal_base = normal_waves(worldposition.xzy);\n',
+                "shaders/lib/water.glsl":
+                    'float earth_distance_vx = texture2D(vxDepthTexTrans, pos.xy).r;\n',
+                "shaders/lib/water_voxy.glsl":
+                    'rainStrength * 0.6 * WATER_TURBULENCE\n'
+                    'bump *= vec3(NdotE) + vec3(0.0, 0.0, 1.0 - NdotE);\n'
+                    'float earth_distance = texture2D(vxDepthTexTrans, pos.xy).x;\n'
+                    '        water_absortion = max(earth_distance - water_distance, 0.0);\n'
+                    '        water_absortion = (1.0 / -((water_absortion * WATER_ABSORPTION) + 1.33)) + 1.0;\n'
+                    'mix(vec3(0.9, 1.0, 1.0), vec3(0.8, 1.3, 1.6) * 0.9, water_absortion)\n',
                 "shaders/entity.properties": "entity.10101=minecraft:lightning_bolt\n",
                 "shaders/common/shadow_vertex.glsl":
                     'attribute vec4 mc_Entity;\n    worldPos = positions.xyz;\n',
@@ -202,6 +217,10 @@ class FastRgbTests(unittest.TestCase):
                               z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("messyDiffuseFactor",
                               z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                self.assertIn("shadow_c_relief = directLight2 * messyDiffuseFactor",
+                              z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                self.assertNotIn("real_light *= messyDiffuseFactor",
+                                 z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("vec3 gloss = vec3(0.0);",
                               z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("image.messyRgbHistoryA", z.read("shaders/shaders.properties").decode())
@@ -228,6 +247,15 @@ class FastRgbTests(unittest.TestCase):
                               z.read("shaders/common/solid_voxy_blocks_fragment.glsl").decode())
                 water_voxy = z.read("shaders/common/water_voxy_blocks_fragment.glsl").decode()
                 self.assertIn("messyWaterRGB", water_voxy)
+                self.assertIn("messyFarWave", water_voxy)
+                self.assertIn("messyNearWave", z.read("shaders/common/water_blocks_fragment.glsl").decode())
+                self.assertIn("water_absortion *= water_absortion;",
+                              z.read("shaders/lib/water_voxy.glsl").decode())
+                self.assertIn("vxDepthTexOpaque", lite_meta)
+                self.assertIn("uniform.float.pale_garden = 0.0",
+                              z.read("shaders/shaders.properties").decode())
+                self.assertIn("#ifdef MESSY_COATED_TEXTURES",
+                              z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertEqual(water_voxy.count("candleColor + messyWaterRGB;"), 3)
                 self.assertIn("clrwl_computeFragment", z.read("shaders/clrwl_gbuffers.fsh").decode())
                 self.assertIn("clrwl_computeFragment", z.read("shaders/clrwl_shadow.fsh").decode())

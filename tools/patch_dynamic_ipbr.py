@@ -50,12 +50,15 @@ vec3 messyGeneratedNormal(sampler2D albedo, vec2 uv, vec3 baseColor,
     float dx = dot(texture2D(albedo, uvX).rgb, vec3(0.2126, 0.7152, 0.0722)) - height;
     float dy = dot(texture2D(albedo, uvY).rgb, vec3(0.2126, 0.7152, 0.0722)) - height;
     textureVariation = clamp(3.0 * (abs(dx) + abs(dy)), 0.0, 1.0);
-    // Albedo luminance is not a height map. Suppress compression noise
-    // and harsh pixel edges before constructing a shallow bump normal.
+    // Albedo luminance is only a height proxy, not a PBR height map. Reject
+    // tiny filtering variations but preserve visible detail in vanilla and
+    // modded atlas textures. This remains two extra samples per fragment.
     vec2 gradient = sign(vec2(dx, dy)) *
-        max(abs(vec2(dx, dy)) - vec2(0.035), vec2(0.0));
-    gradient = clamp(gradient, vec2(-0.16), vec2(0.16));
-    float strength = MESSY_IPBR_NORMAL_STRENGTH * 0.24;
+        max(abs(vec2(dx, dy)) - vec2(0.012), vec2(0.0));
+    gradient = clamp(gradient, vec2(-0.28), vec2(0.28));
+    // The previous 0.24 scale produced <3 degree tilts on common textures
+    // at the default setting; its daylight response was essentially hidden.
+    float strength = min(3.0, MESSY_IPBR_NORMAL_STRENGTH * 0.9);
     vec3 n = normalize(vec3(-gradient * strength, 1.0));
     return normalize(tangentFrame * n);
 }
