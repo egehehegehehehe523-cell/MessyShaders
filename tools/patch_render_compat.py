@@ -28,6 +28,7 @@ void main() {
 """
 
 COLORWHEEL_FRAGMENT = """#version 430 compatibility
+#define MESSY_COLORWHEEL
 // One shared colour-light sample; Colorwheel supplies material fragment,
 // cutout, AO, light and overlay operations through clrwl_computeFragment.
 uniform sampler2D gtexture;
