@@ -353,13 +353,15 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_lod_shading import apply_lod_shading
     report["lod_shading"] = apply_lod_shading(payload)
-    # Nonvisual optimization: shared emission tiles, plus cheaper bloom and
-    # reflection work only when those existing E-Lite features are enabled.
+    # Builds #95/#96 were not visually stable. Keep all of E-Lite's original
+    # water, reflection and bloom code for this diagnostic baseline; the
+    # speculative post-process patch remains outside the generated ZIP.
+    report["fast_post"] = {"status": "disabled; original E-Lite paths restored"}
     try:
-        from .patch_fast_post import apply_fast_post
+        from .patch_rgb_diagnostics import apply_rgb_diagnostics
     except ImportError:
-        from patch_fast_post import apply_fast_post
-    report["fast_post"] = apply_fast_post(payload)
+        from patch_rgb_diagnostics import apply_rgb_diagnostics
+    report["rgb_diagnostics"] = apply_rgb_diagnostics(payload)
     report["limitations"] = [
         "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
         "Approximate voxel occlusion; thin/translucent block correctness pending",

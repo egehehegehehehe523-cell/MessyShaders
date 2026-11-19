@@ -40,29 +40,16 @@ class FastRgbTests(unittest.TestCase):
         base = read_source(SOURCE)
         generated = dict(base)
         apply_overrides(generated, None)
-        water = generated["shaders/lib/water.glsl"].decode()
-        original = base["shaders/lib/water.glsl"].decode()
-        # An explicit reflection edge fade replaces the old mirror-wrap;
-        # depth, refraction, waves, and absorption must stay untouched.
-        original_mirror = """    pos.x = abs(pos.x);
-
-    if (pos.x > RENDER_SCALE) {
-        pos.x = RENDER_SCALE - (pos.x - RENDER_SCALE);
-    }
-
-    return vec4(texture2D(gaux1, pos.xy).rgb, border);
-""".replace("\n\n    return", "\n    \n    return")
-        new_fade = """    vec2 screenUV = pos.xy / RENDER_SCALE;
-    float edgeDistance = min(min(screenUV.x, 1.0 - screenUV.x),
-                             min(screenUV.y, 1.0 - screenUV.y));
-    border *= smoothstep(0.0, 0.05, edgeDistance);
-    if (border <= 0.0) return vec4(0.0);
-
-    return vec4(texture2D(gaux1, pos.xy).rgb, border);
-"""
-        self.assertEqual(water.replace(new_fade, original_mirror), original)
-        self.assertIn("#undef VANILLA_WATER", generated["shaders/lib/config.glsl"].decode())
-        self.assertIn("#define WATER_TEXTURE 0", generated["shaders/lib/config.glsl"].decode())
+        # Build #96's forced water-mode changes blanked water in-game.
+        # This diagnostic build must restore the complete #94 water source.
+        self.assertEqual(generated["shaders/lib/water.glsl"],
+                         base["shaders/lib/water.glsl"])
+        self.assertEqual(generated["shaders/lib/reflections_engine.glsl"],
+                         base["shaders/lib/reflections_engine.glsl"])
+        self.assertEqual(generated["shaders/lib/bloom.glsl"],
+                         base["shaders/lib/bloom.glsl"])
+        config = generated["shaders/lib/config.glsl"].decode()
+        self.assertNotIn("#define MESSY_SHADER_WATER", config)
         far = generated["shaders/lib/water_voxy.glsl"].decode()
         # Only the three shading constants change in Voxy's library; the
         # sensitive water depth and refraction code is byte-for-byte intact.
@@ -381,13 +368,20 @@ class FastRgbTests(unittest.TestCase):
                                 water_vertex.index('#include "/src/light_vertex.glsl"'))
                 self.assertIn("coverage_coating", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn('"fast_post"', z.read("MESSYSHADERS_BUILD.json").decode())
+                self.assertIn('"rgb_diagnostics"', z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("MESSY_COATED_TEXTURES", z.read("shaders/lib/config.glsl").decode())
                 self.assertNotIn("MESSY_IPBR_RELIEF", z.read("shaders/lib/config.glsl").decode())
                 self.assertIn("Generated Normal Strength", z.read("shaders/lang/en_US.lang").decode())
                 self.assertNotIn("Raised Texture Depth", z.read("shaders/lang/en_US.lang").decode())
                 seed = z.read("shaders/world0/prepare.csh").decode()
                 self.assertNotIn("messySeedTile", seed)
-                self.assertIn("#define MESSY_SHADER_WATER", z.read("shaders/lib/config.glsl").decode())
+                self.assertNotIn("#define MESSY_SHADER_WATER", z.read("shaders/lib/config.glsl").decode())
+                self.assertIn("#define MESSY_RGB_DEBUG 0", z.read("shaders/lib/config.glsl").decode())
+                self.assertIn("#define MESSY_RGB_LIVE_FIELD 0", z.read("shaders/lib/config.glsl").decode())
+                diagnostic = z.read("shaders/common/solid_blocks_fragment.glsl").decode()
+                self.assertIn("messyProbe = texture3D(messyRgbBSampler, messyLightUVW)", diagnostic)
+                self.assertIn("messyProbe = texture3D(messyRgbASampler, messyLightUVW)", diagnostic)
+                self.assertIn("messySampleHistory(messyLightUVW, frameCounter)", diagnostic)
                 self.assertIn("messyRgbB", seed)
                 # Only five standalone propagation passes remain, while the
                 # actual six strides and 16-block reach are unchanged.
@@ -499,7 +493,7 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("MESSY_AUTO_MATERIALS MESSY_AUTO_NORMAL_STRENGTH", props)
                 self.assertIn("MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DISTANCE MESSY_AUTO_NORMAL_DEBUG", props)
                 self.assertNotIn("MESSY_AUTO_PARALLAX_DEPTH", props)
-                self.assertIn("sliders = MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DISTANCE ", props)
+                self.assertIn("sliders = MESSY_RGB_DEBUG MESSY_RGB_LIVE_FIELD MESSY_AUTO_NORMAL_STRENGTH MESSY_AUTO_NORMAL_RESOLUTION MESSY_AUTO_NORMAL_DISTANCE ", props)
                 self.assertFalse(info["dynamic_ipbr"]["procedural_pbr"]["enabled_by_default"])
                 self.assertFalse(info["native_auto_materials"]["water_lod_changes"])
                 self.assertFalse(info["lod_shading"]["water_depth_refraction_formula_changed"])

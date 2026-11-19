@@ -12,7 +12,28 @@ Supplied comparison archives:
 
 See [the fast-path audit](docs/FAST_PATH_AUDIT.md).
 
-## November 19: world-light and water recovery (after build #95)
+## November 19: diagnostic baseline after failed builds #95/#96
+
+The tester confirmed **no colored world lighting** and severe water/reflection
+regressions even in #96. This diagnostic build therefore disables all the
+speculative #95/#96 bloom, SSR and water patches, returning those three paths
+to E-Lite's original shader behavior. It retains the #94 RGB compute code
+and working material edits, without assuming that #94's RGB rendering was
+actually validated.
+
+In **Messy Features**, `RGB Pipeline Diagnostic` can be set to 1 for the raw
+RGB seed output, 2 for fully propagated RGB, 3 for temporal history, and 4
+for world-coordinate alignment bands. A black/purple view with no colored
+illumination indicates an empty source at that stage. Test at a placed sea
+lantern, one stage at a time. `Use Live RGB Field` (default off) bypasses
+history to check whether the temporal sampler alone is responsible. Both
+controls are off by default and should be reset after testing.
+
+The next step is to inspect the **Iris runtime log** and the diagnostic
+screenshots before making another visual change. Offline GLSL success is
+not evidence that all custom-image passes executed or were bound correctly.
+
+## November 19: attempted world-light and water recovery in build #96 (withdrawn)
 
 Tester feedback on build #95 showed world RGB light disappearing except for
 the older held-light approximation, near and distant water looking like a
