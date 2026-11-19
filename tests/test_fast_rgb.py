@@ -114,6 +114,7 @@ class FastRgbTests(unittest.TestCase):
                     '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
                 "shaders/common/solid_voxy_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
+                    '        float material_gloss_factor = materialGloss(reflect(viewPositionNormalized, normal), lmcoord, glossPower, normal) * glossFactor;\n'
                     '    blockColor.rgb *= mix(realLight, vec3(1.0), nightVision * 0.125);\n',
                 "shaders/common/water_voxy_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
@@ -122,7 +123,7 @@ class FastRgbTests(unittest.TestCase):
                     '    realLight = vec3(0.0) +\n                candleColor;\n'
                     '    realLight = vec3(0.0) +\n                candleColor;\n',
                 "shaders/common/voxy.json":
-                    '"frameTimeCounter",\n"noisetex": "sampler2D",\n',
+                    '    "endFlashIntensity",\n"frameTimeCounter",\n"noisetex": "sampler2D",\n',
                 "shaders/entity.properties": "entity.10101=minecraft:lightning_bolt\n",
                 "shaders/common/shadow_vertex.glsl":
                     'attribute vec4 mc_Entity;\n    worldPos = positions.xyz;\n',
@@ -138,6 +139,14 @@ class FastRgbTests(unittest.TestCase):
                 "shaders/item.properties": "item.11001 = minecraft:torch minecraft:stone\n",
                 "shaders/block.properties": "block.123 = minecraft:torch minecraft:stone\n",
             }
+            # Lite LOD pairs are loaded by Neo-Voxy from every available
+            # dimension directory and share the same runtime contract.
+            for dim in ("world0", "world-1", "world1", ""):
+                prefix = f"shaders/{dim}/" if dim else "shaders/"
+                src[prefix + "voxy_opaque.glsl"] = (
+                    '#define VOXY_BLOCK\n#include "/common/solid_voxy_blocks_fragment.glsl"\n')
+                src[prefix + "voxy_translucent.glsl"] = (
+                    '#define VOXY_WATER\n#include "/common/water_voxy_blocks_fragment.glsl"\n')
             with ZipFile(zsource, "w") as z:
                 for key, val in src.items():
                     z.writestr("E-Lite-archive/" + key, val)
@@ -196,6 +205,21 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("vec3 oldLight", z.read("shaders/world0/prepare_g.csh").decode())
                 self.assertIn("messyRgbHistoryASampler",
                               z.read("shaders/common/voxy.json").decode())
+                rgb_lib = z.read("shaders/lib/messy_rgb_sample.glsl").decode()
+                self.assertIn("#if !defined(VOXY_BLOCK) && !defined(VOXY_WATER)", rgb_lib)
+                self.assertIn("return texture(sourceField, uv).rgb;", rgb_lib)
+                self.assertIn("return texture3D(sourceField, uv).rgb;", rgb_lib)
+                lite_meta = z.read("shaders/common/voxy.json").decode()
+                self.assertIn("#if MC_VERSION >= 12109", lite_meta)
+                self.assertIn("messyLiteGlossWeight",
+                              z.read("shaders/common/solid_voxy_blocks_fragment.glsl").decode())
+                for dim in ("world0", "world-1", "world1", ""):
+                    prefix = f"shaders/{dim}/" if dim else "shaders/"
+                    for kind in ("opaque", "translucent"):
+                        lite = z.read(prefix + f"voxy_{kind}_lite.glsl").decode()
+                        self.assertIn("VOXY_LITE_CONTRACT api=1;", lite)
+                        self.assertIn("transition=pack-distance-fade", lite)
+                        self.assertIn("#define MESSY_VOXY_LITE", lite)
                 self.assertIn("messyAppliedRGB(messyVoxyUVW, frameCounter)",
                               z.read("shaders/common/solid_voxy_blocks_fragment.glsl").decode())
                 water_voxy = z.read("shaders/common/water_voxy_blocks_fragment.glsl").decode()
