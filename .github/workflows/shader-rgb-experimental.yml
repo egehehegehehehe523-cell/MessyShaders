@@ -51,6 +51,10 @@ jobs:
           python3 tools/flatten_glsl.py dist/MessyShaders-RGB-experimental.zip /tmp/messy-glsl
           find /tmp/messy-glsl -name '*.vert' -print0 | xargs -0 -n 1 glslangValidator -S vert
           find /tmp/messy-glsl -name '*.frag' -print0 | xargs -0 -n 1 glslangValidator -S frag
+      - name: Validate Neo-Voxy sampler binding in core GLSL
+        run: |
+          python3 tools/validate_voxy_glsl.py dist/MessyShaders-RGB-experimental.zip /tmp/messy-voxy-core
+          find /tmp/messy-voxy-core -name '*.frag' -print0 | xargs -0 -n 1 glslangValidator -S frag
       - name: Upload experimental pack and build report
         uses: actions/upload-artifact@v4
         with:
