@@ -1,5 +1,6 @@
 """Fast RGB builder tests: ZIP integrity, classification and patch anchors."""
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ from zipfile import ZipFile
 
 from tools.patch_coverage_coating import parse_entities, expand_entities
 from tools.patch_world_rgb import PROPAGATION_STRIDES, diffusion_source, seed_source
+from tools.patch_fast_post import apply_fast_post
 from tools.build_fast_rgb import (
     SOURCE, read_source, apply_overrides, build, emitter_entries, parse_properties,
     rewrite_property_table, BLOCK_IDS, ITEM_IDS,
@@ -110,10 +112,45 @@ class FastRgbTests(unittest.TestCase):
                     self.assertEqual(old_step(pos), fused_step(pos))
         fused = seed_source()
         self.assertIn("layout(rgba8) uniform writeonly image3D messyRgbB;", fused)
-        self.assertIn("vec3 center = messySeedAt(p);", fused)
+        self.assertIn("vec3 center = messySeedTile[tileXY.x][tileXY.y];", fused)
+        self.assertIn("shared vec3 messySeedTile[10][10];", fused)
+        self.assertIn("barrier();", fused)
+        for side in ("localXY.x == 0", "localXY.x == 7", "localXY.y == 0", "localXY.y == 7"):
+            self.assertIn(side, fused)
         self.assertIn("if (imageLoad(messyOpaqueVolume, p).r != 0u)", fused)
         self.assertIn("vec4(max(center, neighbor * 0.88), 1.0)", fused)
         self.assertNotIn("imageStore(messyRgbA", fused)
+
+    def test_incremental_bloom_rotation_matches_original_symmetric_taps(self):
+        # Advancing by the fractional golden-angle turn is equivalent
+        # modulo PI: the tap pair is invariant to swapping +/- samples.
+        golden = 1.6180339887
+        turn = ((golden % 1.0) * math.pi)
+        for dither in (0.0, 0.01, 0.137, 0.5, 0.99):
+            axis_angle = ((dither * golden) % 1.0) * math.pi
+            axis = (math.cos(axis_angle), math.sin(axis_angle))
+            for index in range(10):
+                angle = (((index + dither) * golden) % 1.0) * math.pi
+                original = (math.cos(angle), math.sin(angle))
+                distance = min(math.dist(axis, original),
+                               math.dist(axis, (-original[0], -original[1])))
+                self.assertLess(distance, 2e-8)
+                axis = (axis[0] * math.cos(turn) - axis[1] * math.sin(turn),
+                        axis[0] * math.sin(turn) + axis[1] * math.cos(turn))
+
+    def test_post_optimizations_do_not_touch_water_or_normal_pipeline(self):
+        original = read_source(SOURCE)
+        pack = {path: original[path] for path in
+                ("shaders/lib/bloom.glsl", "shaders/lib/reflections_engine.glsl",
+                 "shaders/lib/water.glsl", "shaders/common/solid_blocks_fragment.glsl")}
+        apply_fast_post(pack)
+        self.assertIn("vec2 axis = vec2(cos(firstAngle), sin(firstAngle));",
+                      pack["shaders/lib/bloom.glsl"].decode())
+        self.assertIn("if (border <= 0.0) return vec4(0.0);",
+                      pack["shaders/lib/reflections_engine.glsl"].decode())
+        self.assertEqual(pack["shaders/lib/water.glsl"], original["shaders/lib/water.glsl"])
+        self.assertEqual(pack["shaders/common/solid_blocks_fragment.glsl"],
+                         original["shaders/common/solid_blocks_fragment.glsl"])
 
     def test_multiline_properties(self):
         table = parse_properties("block.21004 = mod:red_lamp \\\n mod:red_torch \\\n mod:red_candle\n# comment\nblock.22 = dirt\n")
@@ -291,6 +328,10 @@ class FastRgbTests(unittest.TestCase):
                     '#define VOXY_BLOCK\n#include "/common/solid_voxy_blocks_fragment.glsl"\n')
                 src[prefix + "voxy_translucent.glsl"] = (
                     '#define VOXY_WATER\n#include "/common/water_voxy_blocks_fragment.glsl"\n')
+            # Exercise real E-Lite optimization anchors in the synthetic ZIP.
+            original_post = read_source(SOURCE)
+            for name in ("shaders/lib/bloom.glsl", "shaders/lib/reflections_engine.glsl"):
+                src[name] = original_post[name].decode("utf-8")
             with ZipFile(zsource, "w") as z:
                 for key, val in src.items():
                     z.writestr("E-Lite-archive/" + key, val)
@@ -312,11 +353,13 @@ class FastRgbTests(unittest.TestCase):
                 self.assertLess(water_vertex.index('#include "/lib/messy_fast_lights.glsl"'),
                                 water_vertex.index('#include "/src/light_vertex.glsl"'))
                 self.assertIn("coverage_coating", z.read("MESSYSHADERS_BUILD.json").decode())
+                self.assertIn('"fast_post"', z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("MESSY_COATED_TEXTURES", z.read("shaders/lib/config.glsl").decode())
                 self.assertNotIn("MESSY_IPBR_RELIEF", z.read("shaders/lib/config.glsl").decode())
                 self.assertIn("Generated Normal Strength", z.read("shaders/lang/en_US.lang").decode())
                 self.assertNotIn("Raised Texture Depth", z.read("shaders/lang/en_US.lang").decode())
                 seed = z.read("shaders/world0/prepare.csh").decode()
+                self.assertIn("shared vec3 messySeedTile[10][10]", seed)
                 self.assertIn("messyRgbB", seed)
                 # Only five standalone propagation passes remain, while the
                 # actual six strides and 16-block reach are unchanged.

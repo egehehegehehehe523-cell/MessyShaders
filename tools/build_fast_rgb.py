@@ -353,6 +353,13 @@ def apply_overrides(payload: dict[str, bytes], euphoria_root: Path | None) -> di
     except ImportError:
         from patch_lod_shading import apply_lod_shading
     report["lod_shading"] = apply_lod_shading(payload)
+    # Nonvisual optimization: shared emission tiles, plus cheaper bloom and
+    # reflection work only when those existing E-Lite features are enabled.
+    try:
+        from .patch_fast_post import apply_fast_post
+    except ImportError:
+        from patch_fast_post import apply_fast_post
+    report["fast_post"] = apply_fast_post(payload)
     report["limitations"] = [
         "Prototype 48-cubed nearby volume, six diffusion steps; not performance-tested",
         "Approximate voxel occlusion; thin/translucent block correctness pending",

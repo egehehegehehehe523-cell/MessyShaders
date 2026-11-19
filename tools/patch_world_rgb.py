@@ -91,6 +91,10 @@ def seed_source() -> str:
         "#version 430",
         "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;",
         "const ivec3 workGroups = ivec3(6, 6, 48);",
+        # One shared 10x10 XY tile (including cardinal halos) eliminates
+        # four redundant global emission-volume reads per interior voxel.
+        # Z neighbours remain direct loads. ~1.2 KiB shared memory/group.
+        "shared vec3 messySeedTile[10][10];",
         "layout(r32ui) uniform readonly uimage3D messyEmitVolume;",
         "layout(r32ui) uniform readonly uimage3D messyOpaqueVolume;",
         # The first propagation step previously wrote B after a separate
@@ -115,15 +119,22 @@ def seed_source() -> str:
         "}",
         "void main() {",
         "    ivec3 p = ivec3(gl_GlobalInvocationID);",
-        "    if (any(greaterThanEqual(p, ivec3(48)))) return;",
-        "    vec3 center = messySeedAt(p);",
+        "    ivec2 localXY = ivec2(gl_LocalInvocationID.xy);",
+        "    ivec2 tileXY = localXY + ivec2(1);",
+        "    messySeedTile[tileXY.x][tileXY.y] = messySeedAt(p);",
+        "    if (localXY.x == 0) messySeedTile[0][tileXY.y] = messySeedAt(p - ivec3(1,0,0));",
+        "    if (localXY.x == 7) messySeedTile[9][tileXY.y] = messySeedAt(p + ivec3(1,0,0));",
+        "    if (localXY.y == 0) messySeedTile[tileXY.x][0] = messySeedAt(p - ivec3(0,1,0));",
+        "    if (localXY.y == 7) messySeedTile[tileXY.x][9] = messySeedAt(p + ivec3(0,1,0));",
+        "    barrier(); // All threads must populate the shared tile before reading halos.",
+        "    vec3 center = messySeedTile[tileXY.x][tileXY.y];",
         "    if (imageLoad(messyOpaqueVolume, p).r != 0u) {",
         "        imageStore(messyRgbB, p, vec4(center, 1.0));",
         "        return;",
         "    }",
         "    vec3 neighbor = max(",
-        "        max(messySeedAt(p + ivec3(1,0,0)), messySeedAt(p - ivec3(1,0,0))),",
-        "        max(messySeedAt(p + ivec3(0,1,0)), messySeedAt(p - ivec3(0,1,0))));",
+        "        max(messySeedTile[tileXY.x + 1][tileXY.y], messySeedTile[tileXY.x - 1][tileXY.y]),",
+        "        max(messySeedTile[tileXY.x][tileXY.y + 1], messySeedTile[tileXY.x][tileXY.y - 1]));",
         "    neighbor = max(neighbor, messySeedAt(p + ivec3(0,0,1)));",
         "    neighbor = max(neighbor, messySeedAt(p - ivec3(0,0,1)));",
         "    imageStore(messyRgbB, p, vec4(max(center, neighbor * 0.88), 1.0));",
@@ -278,7 +289,7 @@ image.messyRgbB = messyRgbBSampler rgba rgba8 float true false 48 48 48
             put(pack, f"{prefix}_{suffix}.csh",
                 diffusion_source(source_field, target_field, PROPAGATION_STRIDES[index]))
     return {
-        "mode": "Iris 48^3 voxel emission + 5 standalone passes (first propagation fused with seed), guarded 16-block reach, RGBA8",
+        "mode": "Iris 48^3 voxel emission + shared-tile fused seed + 5 standalone passes, guarded 16-block reach, RGBA8",
         "max_propagation_reach": sum(PROPAGATION_STRIDES),
         "gpu_measured": False,
         "irradiance_occlusion": "basic block-based voxel occupancy; not per-face exact",
