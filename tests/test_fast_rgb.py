@@ -111,6 +111,8 @@ class FastRgbTests(unittest.TestCase):
                     '            float block_luma2 = pow(block_luma * glossParms.b, glossParms.a);\n'
                     '            float isMetal = 0.0;\n'
                     '            f0_val = reflex_index2;\n'
+                    '        vec3 gloss;\n        if(block_type != 1.0){\n'
+                    '        }\n'
                     '    block_color.rgb *= mix(real_light, vec3(1.0), nightVision * 0.125);\n',
                 "shaders/common/solid_voxy_blocks_fragment.glsl":
                     '#include "/lib/luma.glsl"\n'
@@ -199,6 +201,8 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("messyAppliedRGB(messyLightUVW, frameCounter)",
                               z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("messyDiffuseFactor",
+                              z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                self.assertIn("vec3 gloss = vec3(0.0);",
                               z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("image.messyRgbHistoryA", z.read("shaders/shaders.properties").decode())
                 self.assertIn("image.messyRgbHistoryB", z.read("shaders/shaders.properties").decode())
