@@ -266,7 +266,8 @@ def apply_native_auto_materials(pack: dict[str, bytes]) -> dict:
         float messyBumpAmount = length(normalize(bumpedNormal) - normalize(flat_normal));
         block_color.rgb = vec3(clamp(messyBumpAmount * 5.0, 0.0, 1.0));
     #endif
-    #include "/src/writebuffers.glsl"""
+    #include "/src/writebuffers.glsl"
+"""
     )
 
     pack[library] += LIBRARY.encode("utf-8")

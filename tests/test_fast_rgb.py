@@ -271,6 +271,8 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("texture2D(specular, texcoord)", fragment)
                 self.assertIn("shadow_c_relief, shadow_c, vec3(0.0), candle_color", fragment)
                 self.assertIn("block_color.rgb = vec3(clamp(messyBumpAmount * 5.0", fragment)
+                self.assertIn('    #include "/src/writebuffers.glsl"\n', fragment)
+                self.assertNotIn('    #include "/src/writebuffers.glsl\n', fragment)
                 self.assertIn("defined LabPBR || defined MESSY_IPBR || defined MESSY_AUTO_MATERIALS", vertex)
                 self.assertIn("texture2D(albedo, rightUV)", auto_lib)
                 self.assertIn("texture2D(albedo, leftUV)", auto_lib)

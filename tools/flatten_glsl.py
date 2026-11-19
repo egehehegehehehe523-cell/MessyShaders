@@ -50,6 +50,11 @@ def main():
         raise RuntimeError("Water/translucent vertex shader was not included in compile list")
     for name in checks:
         text = flatten(name, files)
+        # A malformed include (e.g. a dropped trailing quote) does not match
+        # INCLUDE and otherwise slips through to a much later GLSL failure.
+        unresolved = re.findall(r'^\s*#include\b[^\n]*', text, re.MULTILINE)
+        if unresolved:
+            raise ValueError(f"Unresolved include in {name}: {unresolved[0]!r}")
         match = re.match(r"#version\s+(120|430 compatibility)", text)
         if not match:
             raise RuntimeError(f"Unexpected shader version in {name}")
