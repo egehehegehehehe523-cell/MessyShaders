@@ -90,9 +90,10 @@ vec3 messySampleHistory(vec3 uv, int frameIndex) {
 vec3 messyAppliedRGB(vec3 uv, int frameIndex) {
     vec3 rgb = max(messySampleHistory(uv, frameIndex), vec3(0.0));
     float energy = max(rgb.r, max(rgb.g, rgb.b));
-    // Soft attenuation keeps the new 11-14 block propagation visible without
-    // sharply discarding weak color at the old ten-block boundary.
-    float gentleCutoff = smoothstep(0.022, 0.10, energy);
+    // Strong emitters now illuminate out to ~16 cells, with a gentle tail;
+    // small entity/item emitters still fade earlier. Don't cut colour at
+    // the former ten-block radius.
+    float gentleCutoff = smoothstep(0.08, 0.18, energy);
     // The camera-centred volume must not terminate in a luminous square.
     // Fade the outer four voxel cells; all renderers share this mask.
     vec3 edgeCells = min(uv, vec3(1.0) - uv) * 48.0;

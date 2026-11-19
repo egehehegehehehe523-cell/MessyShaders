@@ -92,13 +92,9 @@ uint messyEntityColorIndex(int entity) {{
     return 0u;
 }}
 
-void messyWriteDynamicVoxel(vec3 worldRelative) {{
+void messyWriteDynamicVoxel() {{
 #ifdef MESSY_DYNAMIC_EMITTERS
-    // Use the same camera-relative integer cell as placed block emitters.
-    ivec3 voxel = ivec3(floor(worldRelative + fract(cameraPosition) + 24.0));
-    if (any(lessThan(voxel, ivec3(0))) ||
-        any(greaterThanEqual(voxel, ivec3(48)))) return;
-
+    // Classify before doing the matrix work. Ordinary terrain pays nothing.
     uint index = 0u;
     if (currentRenderedItemId >= 26100 && currentRenderedItemId <= 26112)
         index = uint(currentRenderedItemId - 26099);
@@ -124,7 +120,36 @@ void messyWriteDynamicVoxel(vec3 worldRelative) {{
             tier = 6u;  // magma cube
         else if (entityId == 26202)
             tier = 7u;  // end crystal
-        imageAtomicMax(messyEmitVolume, voxel, (tier << 8u) | index);
+        // gl_ModelViewMatrix contains the current entity/item transform.
+        // Its local origin moves continuously with the object, unlike a
+        // vertex position (which walks around the animated mesh). Convert
+        // that origin to the same camera-relative coordinates as blocks.
+        vec3 modelOrigin = (shadowModelViewInverse * gl_ModelViewMatrix *
+                            vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        vec3 gridPosition = modelOrigin + fract(cameraPosition) + vec3(23.5);
+        ivec3 lowerCorner = ivec3(floor(gridPosition));
+        vec3 blend = fract(gridPosition);
+
+        // A sub-voxel light is represented on the eight nearest lattice
+        // points. The normalization preserves perceived light at its actual
+        // position after the 3D sampler interpolates those points again.
+        // This costs no new compute pass and avoids one-cell jumps.
+        vec3 axisNorm = blend * blend + (vec3(1.0) - blend) *
+                        (vec3(1.0) - blend);
+        float samplingNorm = axisNorm.x * axisNorm.y * axisNorm.z;
+        for (int corner = 0; corner < 8; ++corner) {{
+            ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1,
+                                 (corner >> 2) & 1);
+            ivec3 voxel = lowerCorner + offset;
+            if (any(lessThan(voxel, ivec3(0))) ||
+                any(greaterThanEqual(voxel, ivec3(48)))) continue;
+            vec3 factors = mix(vec3(1.0) - blend, blend, vec3(offset));
+            float contribution = factors.x * factors.y * factors.z / samplingNorm;
+            float light = clamp((float(tier) / 15.0) * contribution, 0.0, 1.0);
+            uint quantized = uint(floor(light * 255.0 + 0.5));
+            if (quantized > 0u)
+                imageAtomicMax(messyEmitVolume, voxel, (quantized << 8u) | index);
+        }}
     }}
 #endif
 }}
@@ -135,7 +160,7 @@ void messyWriteDynamicVoxel(vec3 worldRelative) {{
     patch_one(files,path,
               '    messyWriteVoxel(positions.xyz + at_midBlock.xyz / 64.0, int(mc_Entity.x));',
               '    messyWriteVoxel(positions.xyz + at_midBlock.xyz / 64.0, int(mc_Entity.x));\n'
-              '    messyWriteDynamicVoxel(positions.xyz);')
+              '    messyWriteDynamicVoxel();')
 
     # Existing E-Lite IDs are preserved, notably the lightning classification.
     entity_path = "shaders/entity.properties"
@@ -153,8 +178,10 @@ void messyWriteDynamicVoxel(vec3 worldRelative) {{
     return {"enabled_by_default": True,
             "source": "Iris currentRenderedItemId + entityId in shadow pass",
             "categories": list(ENTITY_COLORS),
+            "subvoxel_sources": "matrix-derived moving origin, trilinear eight-corner atomic splat",
             "limitations": ["Only objects drawn in shadow pass",
-                            "Entity geometry, not entity centers, seeds nearby cells",
+                            "Per-part transforms may not share an entity-wide origin",
+                            "Multiple source vertices still repeat the same idempotent atomics",
                             "Voxel collisions select the strongest source tier then palette index",
                             "Fire on arbitrary entities requires dedicated detection"]}
 

@@ -84,7 +84,7 @@ void main() {
         if (all(greaterThanEqual(voxel,ivec3(0))) &&
             all(lessThan(voxel,ivec3(48)))) {
             imageAtomicMax(messyEmitVolume, voxel,
-                           (15u << 8u) | uint(materialId - 25999));
+                           (255u << 8u) | uint(materialId - 25999));
         }
     }
 }

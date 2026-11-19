@@ -2,7 +2,7 @@
 
 Experimental: re-voxelizes the nearby 48^3 area during the existing shadow
 pass, then performs six low-resolution 6-neighbour propagation steps before
-the gbuffers render. Variable guarded jumps cover roughly fourteen blocks
+the gbuffers render. Variable guarded jumps cover roughly sixteen blocks
 without adding dispatches. The RGB images use normalized 8-bit storage;
 the source palette and propagated intensities are bounded to [0, 1].
 This gives placed block light surface spill and basic blocking by full blocks,
@@ -17,9 +17,9 @@ from typing import Any
 SIZE = 48
 STEPS = 6
 # Retain one-voxel coverage at the source, then use multi-scale jumps.
-# This covers >98% of the 14-block Manhattan ball in six passes; every
-# intermediate voxel must be tested so a 3/4-cell jump cannot cross a wall.
-PROPAGATION_STRIDES = (1, 1, 2, 3, 3, 4)
+# This covers >99% of the 16-block Manhattan ball in six passes; every
+# intermediate voxel must be tested so a multi-cell jump cannot cross a wall.
+PROPAGATION_STRIDES = (1, 1, 2, 3, 4, 5)
 assert len(PROPAGATION_STRIDES) == STEPS
 COLORS = [
     (1.00, 0.98, 0.93),  # white
@@ -67,10 +67,10 @@ void messyWriteVoxel(vec3 worldRelative, int blockId) {
         return;
 
     if (blockId >= 26000 && blockId <= 26012) {
-        // High byte = intensity tier (15/15 for placed full block emitters),
+        // High byte = intensity (255/255 for placed full block emitters),
         // low byte = palette index; enables compact category-scaled moving
         // emitters without allocating a second RGB light volume.
-        imageAtomicMax(messyEmitVolume, voxel, (15u << 8u) | uint(blockId - 25999));
+        imageAtomicMax(messyEmitVolume, voxel, (255u << 8u) | uint(blockId - 25999));
     } else if (blockId > 0 && blockId < 26000 &&
                blockId != int(ENTITY_LEAVES) &&
                blockId != int(ENTITY_WHITE_LEAVES) &&
@@ -104,7 +104,7 @@ def seed_source() -> str:
         "    if (any(greaterThanEqual(p, ivec3(48)))) return;",
         "    uint messyPackedVoxel = imageLoad(messyEmitVolume, p).r;",
         "    uint idx = messyPackedVoxel & 255u;",
-        "    float lightScale = float((messyPackedVoxel >> 8u) & 255u) / 15.0;",
+        "    float lightScale = float((messyPackedVoxel >> 8u) & 255u) / 255.0;",
         "    imageStore(messyRgbA, p, vec4(messyPalette(idx) * lightScale, 1.0));",
         "}",
         "",
@@ -115,7 +115,9 @@ def seed_source() -> str:
 def diffusion_source(input_field: str, output_field: str, stride: int) -> str:
     # All invocations only read previous-field values; each destination voxel
     # has a single writer per pass. No racing imageStore writes.
-    attenuation = 0.83 ** stride
+    # The former 0.83 per-cell loss removed most useful colour by block 10.
+    # This is still attenuated each *actual* traversed block, not each pass.
+    attenuation = 0.88 ** stride
     return f"""#version 430
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 const ivec3 workGroups = ivec3(6, 6, 48);
@@ -253,7 +255,7 @@ image.messyRgbB = messyRgbBSampler rgba rgba8 float true false 48 48 48
             put(pack, f"{prefix}_{suffix}.csh",
                 diffusion_source(source_field, target_field, PROPAGATION_STRIDES[index]))
     return {
-        "mode": "Iris 48^3 voxel emission + 6 passes, guarded 14-block propagation reach, RGBA8",
+        "mode": "Iris 48^3 voxel emission + 6 passes, guarded 16-block propagation reach, RGBA8",
         "max_propagation_reach": sum(PROPAGATION_STRIDES),
         "gpu_measured": False,
         "irradiance_occlusion": "basic block-based voxel occupancy; not per-face exact",

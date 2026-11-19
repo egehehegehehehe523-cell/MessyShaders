@@ -13,6 +13,27 @@ from tools.build_fast_rgb import (
 )
 
 class FastRgbTests(unittest.TestCase):
+    def test_subvoxel_emitter_weights_keep_brightness_across_cell_boundaries(self):
+        # Independent numerical check of the eight-corner normalization used
+        # by moving sources. Ignore 8-bit quantization and overlapping lights.
+        def footprint(fraction):
+            weights = [(1.0 - fraction[0]) * (1.0 - fraction[1]) * (1.0 - fraction[2]),
+                       fraction[0] * (1.0 - fraction[1]) * (1.0 - fraction[2]),
+                       (1.0 - fraction[0]) * fraction[1] * (1.0 - fraction[2]),
+                       fraction[0] * fraction[1] * (1.0 - fraction[2]),
+                       (1.0 - fraction[0]) * (1.0 - fraction[1]) * fraction[2],
+                       fraction[0] * (1.0 - fraction[1]) * fraction[2],
+                       (1.0 - fraction[0]) * fraction[1] * fraction[2],
+                       fraction[0] * fraction[1] * fraction[2]]
+            normalization = sum(weight * weight for weight in weights)
+            return [weight / normalization for weight in weights], weights
+
+        for fraction in ((0.0, 0.0, 0.0), (0.25, 0.4, 0.65),
+                         (0.5, 0.5, 0.5), (0.99, 0.01, 0.45)):
+            seeded, sample_weights = footprint(fraction)
+            sampled = sum(a * b for a, b in zip(seeded, sample_weights))
+            self.assertAlmostEqual(sampled, 1.0)
+
     def test_water_depth_and_near_shader_remain_stable(self):
         base = read_source(SOURCE)
         generated = dict(base)
@@ -32,9 +53,9 @@ class FastRgbTests(unittest.TestCase):
 
     def test_rgb_propagation_range_keeps_six_dispatches_and_checks_walls(self):
         self.assertEqual(len(PROPAGATION_STRIDES), 6)
-        self.assertEqual(sum(PROPAGATION_STRIDES), 14)
-        code = diffusion_source("messyRgbA", "messyRgbB", 4)
-        self.assertIn("const int messyStride = 4;", code)
+        self.assertEqual(sum(PROPAGATION_STRIDES), 16)
+        code = diffusion_source("messyRgbA", "messyRgbB", 5)
+        self.assertIn("const int messyStride = 5;", code)
         self.assertIn("stepIndex < messyStride", code)
         self.assertIn("p + direction * stepIndex", code)
         self.assertIn("layout(rgba8)", code)
@@ -48,11 +69,11 @@ class FastRgbTests(unittest.TestCase):
             active |= {(x + dx * stride, y + dy * stride, z + dz * stride)
                        for x, y, z in active for dx, dy, dz in directions}
         near = {(x, y, z)
-                for x in range(-14, 15)
-                for y in range(-14, 15)
-                for z in range(-14, 15)
-                if abs(x) + abs(y) + abs(z) <= 14}
-        self.assertGreater(len(active & near) / len(near), 0.98)
+                for x in range(-16, 17)
+                for y in range(-16, 17)
+                for z in range(-16, 17)
+                if abs(x) + abs(y) + abs(z) <= 16}
+        self.assertGreater(len(active & near) / len(near), 0.99)
 
     def test_multiline_properties(self):
         table = parse_properties("block.21004 = mod:red_lamp \\\n mod:red_torch \\\n mod:red_candle\n# comment\nblock.22 = dirt\n")
@@ -263,7 +284,7 @@ class FastRgbTests(unittest.TestCase):
                 self.assertNotRegex(seed, r"\b(?:uint|int|float)\s+packed\b")
                 self.assertIn("tier = 2u;  // XP orbs",
                               z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
-                self.assertIn("(15u << 8u)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
+                self.assertIn("(255u << 8u)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
                 self.assertNotIn("messyOffsetUVW", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertNotIn("messyReliefDelta", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("entity.26210", z.read("shaders/entity.properties").decode())
@@ -272,6 +293,14 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("dynamic_ipbr", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("entity.26201", z.read("shaders/entity.properties").decode())
                 self.assertIn("messyWriteDynamicVoxel", z.read("shaders/common/shadow_vertex.glsl").decode())
+                shadow = z.read("shaders/common/shadow_vertex.glsl").decode()
+                voxel_source = z.read("shaders/lib/messy_voxel_vertex.glsl").decode()
+                self.assertIn("messyWriteDynamicVoxel();", shadow)
+                self.assertIn("shadowModelViewInverse * gl_ModelViewMatrix", voxel_source)
+                self.assertIn("for (int corner = 0; corner < 8; ++corner)", voxel_source)
+                self.assertIn("float samplingNorm = axisNorm.x * axisNorm.y * axisNorm.z;", voxel_source)
+                self.assertIn("(quantized << 8u) | index", voxel_source)
+                self.assertNotIn("messyWriteDynamicVoxel(positions.xyz)", shadow)
                 self.assertIn("MESSY_IPBR", z.read("shaders/lib/config.glsl").decode())
                 self.assertIn("messyGeneratedNormal", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 config = z.read("shaders/lib/config.glsl").decode()
@@ -377,9 +406,9 @@ class FastRgbTests(unittest.TestCase):
                 self.assertIn("return texture(sourceField, uv).rgb;", rgb_lib)
                 self.assertIn("return texture3D(sourceField, uv).rgb;", rgb_lib)
                 self.assertIn("float volumeEdgeFade = smoothstep(0.75, 4.0, minEdgeCells);", rgb_lib)
-                self.assertIn("float gentleCutoff = smoothstep(0.022, 0.10, energy);", rgb_lib)
+                self.assertIn("float gentleCutoff = smoothstep(0.08, 0.18, energy);", rgb_lib)
                 self.assertIn("rgba rgba8 float false false 48 48 48", props)
-                self.assertEqual(json.loads(z.read("MESSYSHADERS_BUILD.json"))["world_rgb"]["max_propagation_reach"], 14)
+                self.assertEqual(json.loads(z.read("MESSYSHADERS_BUILD.json"))["world_rgb"]["max_propagation_reach"], 16)
                 lite_meta = z.read("shaders/common/voxy.json").decode()
                 self.assertIn("#if MC_VERSION >= 12109", lite_meta)
                 self.assertIn("messyLiteGlossWeight",
