@@ -149,7 +149,16 @@ class FastRgbTests(unittest.TestCase):
                                 water_vertex.index('#include "/src/light_vertex.glsl"'))
                 self.assertIn("coverage_coating", z.read("MESSYSHADERS_BUILD.json").decode())
                 self.assertIn("MESSY_COATED_TEXTURES", z.read("shaders/lib/config.glsl").decode())
-                self.assertIn("MESSY_IPBR_RELIEF", z.read("shaders/lib/config.glsl").decode())
+                self.assertNotIn("MESSY_IPBR_RELIEF", z.read("shaders/lib/config.glsl").decode())
+                self.assertIn("Generated Normal Strength", z.read("shaders/lang/en_US.lang").decode())
+                self.assertNotIn("Raised Texture Depth", z.read("shaders/lang/en_US.lang").decode())
+                self.assertIn("uint packed = imageLoad(messyEmitVolume, p).r",
+                              z.read("shaders/world0/prepare.csh").decode())
+                self.assertIn("tier = 2u;  // XP orbs",
+                              z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
+                self.assertIn("(15u << 8u)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
+                self.assertNotIn("messyOffsetUVW", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
+                self.assertNotIn("messyReliefDelta", z.read("shaders/common/solid_blocks_fragment.glsl").decode())
                 self.assertIn("entity.26210", z.read("shaders/entity.properties").decode())
                 self.assertIn("if (entity == 10201)", z.read("shaders/lib/messy_voxel_vertex.glsl").decode())
                 self.assertIn("Normal Map Strength", z.read("shaders/lang/en_US.lang").decode())
