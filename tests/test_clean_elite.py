@@ -21,6 +21,7 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/water_blocks_fragment.glsl",
             "shaders/lib/water.glsl",
             "shaders/lib/water_voxy.glsl",
+            "shaders/lib/messy_water_composite.glsl",
             "shaders/common/shadow_vertex.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
@@ -51,7 +52,14 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b'0: "SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA"',
                       pack["shaders/common/voxy.json"])
         self.assertIn(b"out float waterAlpha", pack["shaders/lib/water_voxy.glsl"])
-        self.assertIn(b"blockColor.a = messyBlendAlpha", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertIn(b"blockColor = messyWaterCompose(", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertIn(b"block_color = messyWaterCompose(", pack["shaders/common/water_blocks_fragment.glsl"])
+        self.assertIn(b"water_absortion = messyWaterOpacity(water_absortion)", pack["shaders/lib/water.glsl"])
+        self.assertIn(b"water_absortion = messyWaterOpacity(water_absortion)", pack["shaders/lib/water_voxy.glsl"])
+        self.assertIn(b"out float waterAlpha", pack["shaders/lib/water.glsl"])
+        self.assertIn(b"float messyWaterOpacity(float thickness)", pack["shaders/lib/messy_water_composite.glsl"])
+        self.assertIn(b"blend.gbuffers_water=SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA", pack["shaders/shaders.properties"])
+        self.assertIn(b"#if defined MESSY_WATER_PARITY && defined VOXY", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"return color;", pack["shaders/lib/water_voxy.glsl"])
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_WATER_PARITY", pack["shaders/common/water_blocks_fragment.glsl"])
@@ -79,6 +87,26 @@ class CleanEliteTest(unittest.TestCase):
                       pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         self.assertNotIn(b"block_color.a = 1.0;", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertNotIn(b"blockColor.a = 1.0;", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+
+    def test_same_water_compositor_is_mathematically_consistent(self):
+        # Verify the shared GLSL source-over decomposition for both pipelines:
+        # shader_old = (1-f)*((1-a)*background+a*surface)+f*reflect+sun.
+        # shader_new = alpha*source+(1-alpha)*background.
+        from math import isclose
+        for absorption in (0.2481, 0.33, 0.55, 0.91, 1.0):
+            for reflection in (0.0, 0.15, 0.4, 0.9, 1.0):
+                opacity = absorption + (1.0 - absorption) * reflection
+                for background, surface, reflected, sunlight in (
+                    (0.05, 0.6, 0.9, 0.0),
+                    (0.8, 0.05, 0.4, 0.06),
+                    (0.2, 0.4, 1.4, 0.5),
+                ):
+                    shaded = (1.0 - reflection) * surface + reflection * reflected + sunlight
+                    premultiplied = shaded - (1.0 - reflection) * (1.0 - absorption) * surface
+                    source = premultiplied / max(opacity, 0.001)
+                    old = (1.0 - reflection) * ((1.0 - absorption) * background + absorption * surface) + reflection * reflected + sunlight
+                    new = opacity * source + (1.0 - opacity) * background
+                    self.assertTrue(isclose(old, new, abs_tol=1e-7))
 
 
 if __name__ == "__main__":
