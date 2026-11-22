@@ -3,8 +3,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from build_elite_materials_voxy import patch
-from build_fast_rgb import SOURCE, read_source
+from build_elite_materials_voxy import patch, SOURCE, read_source
 
 
 class CleanEliteTest(unittest.TestCase):
