@@ -46,6 +46,13 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"vxProjInv", pack["shaders/lib/water_voxy.glsl"])
         self.assertIn(b'"vxDepthTexOpaque": "sampler2D"',
                       pack["shaders/common/voxy.json"])
+        self.assertIn(b'"excludeLodsFromVanillaDepth": true',
+                      pack["shaders/common/voxy.json"])
+        self.assertIn(b'0: "SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA"',
+                      pack["shaders/common/voxy.json"])
+        self.assertIn(b"out float waterAlpha", pack["shaders/lib/water_voxy.glsl"])
+        self.assertIn(b"blockColor.a = messyBlendAlpha", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertIn(b"return color;", pack["shaders/lib/water_voxy.glsl"])
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_WATER_PARITY", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_WATER_PARITY", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
