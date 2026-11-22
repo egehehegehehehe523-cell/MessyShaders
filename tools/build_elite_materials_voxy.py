@@ -200,6 +200,76 @@ def patch(pack: dict[str, bytes]) -> None:
                 "            water_absortion *= water_absortion;\n"
                 "        #endif")
 
+    # Complementary uses vxDepthTexOpaque for water thickness, not the
+    # translucent depth attachment. E-Lite's old near and Voxy paths treated
+    # vxDepthTexTrans as the ocean floor and reconstructed it with hardcoded
+    # near/far clipping planes. This makes Voxy water much less transparent
+    # than the nearby water over the same underwater terrain and seagrass.
+    # Use the actual inverse projection and the opaque depth on both sides.
+    replace_one(pack, near_water,
+                "    uniform sampler2D vxDepthTexTrans;",
+                "    uniform sampler2D vxDepthTexTrans;\n"
+                "    uniform sampler2D vxDepthTexOpaque;\n"
+                "    uniform mat4 vxProjInv;")
+    replace_one(pack, near_lib,
+                "        float water_distance =\n"
+                "        2.0 * near * far / (far + near - (2.0 * gl_FragCoord.z - 1.0) * (far - near));",
+                """        #if defined MESSY_UNIFIED_WATER && defined VOXY
+            float water_distance = length(fragpos);
+            float messyDepth = texture2D(depthtex1, pos.xy).r;
+            vec4 messyDepthView = gbufferProjectionInverse *
+                vec4(pos.xy * 2.0 - 1.0, messyDepth * 2.0 - 1.0, 1.0);
+            float messyOpaqueDistance = length(messyDepthView.xyz / messyDepthView.w);
+            float messyVoxyDepth = texture2D(vxDepthTexOpaque, pos.xy).r;
+            vec4 messyVoxyView = vxProjInv *
+                vec4(pos.xy * 2.0 - 1.0, messyVoxyDepth * 2.0 - 1.0, 1.0);
+            float earth_distance = min(messyOpaqueDistance,
+                length(messyVoxyView.xyz / messyVoxyView.w));
+        #else
+            float water_distance =
+            2.0 * near * far / (far + near - (2.0 * gl_FragCoord.z - 1.0) * (far - near));""")
+    replace_one(pack, near_lib,
+                "        water_absortion = earth_distance - water_distance;",
+                """        #endif
+        water_absortion = max(earth_distance - water_distance, 0.0);""")
+    # The legacy #elif VOXY branch is guarded by the outer #else above, so
+    # it remains available when the unified water option is disabled.
+    far_lib = "shaders/lib/water_voxy.glsl"
+    replace_one(pack, far_lib,
+                "    const float vxNear = 16.0;\n    const float vxFar  = 48000.0;",
+                """    #ifndef MESSY_UNIFIED_WATER
+        const float vxNear = 16.0;
+        const float vxFar  = 48000.0;
+    #endif""")
+    replace_one(pack, far_lib,
+                "        float water_distance = 2.0 * vxNear * vxFar / (vxFar + vxNear - (2.0 * gl_FragCoord.z - 1.0) * (vxFar - vxNear));",
+                """        #ifdef MESSY_UNIFIED_WATER
+            float water_distance = length(fragpos);
+            float messyOpaqueDepth = texture2D(vxDepthTexOpaque, pos.xy).r;
+            vec4 messyOpaqueView = vxProjInv *
+                vec4(pos.xy * 2.0 - 1.0, messyOpaqueDepth * 2.0 - 1.0, 1.0);
+            float earth_distance = length(messyOpaqueView.xyz / messyOpaqueView.w);
+        #else
+            float water_distance = 2.0 * vxNear * vxFar / (vxFar + vxNear - (2.0 * gl_FragCoord.z - 1.0) * (vxFar - vxNear));""")
+    replace_one(pack, far_lib,
+                "        water_absortion = max(earth_distance - water_distance, 0.0);",
+                """        #endif
+        water_absortion = max(earth_distance - water_distance, 0.0);""")
+    replace_one(pack, near_lib,
+                "    return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.95, 1.0, 1.0), vec3(0.8, 1.1, 1.4) * 0.9, water_absortion), color, water_absortion);",
+                """    #ifdef MESSY_UNIFIED_WATER
+        return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.9, 1.0, 1.0),
+            vec3(0.8, 1.3, 1.6) * 0.9, water_absortion), color, water_absortion);
+    #else
+        return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.95, 1.0, 1.0),
+            vec3(0.8, 1.1, 1.4) * 0.9, water_absortion), color, water_absortion);
+    #endif""")
+    voxy_json = "shaders/common/voxy.json"
+    replace_one(pack, voxy_json,
+                '    "vxDepthTexTrans": "sampler2D"',
+                '    "vxDepthTexTrans": "sampler2D",\n'
+                '    "vxDepthTexOpaque": "sampler2D"')
+
     # E-Lite's caustics.glsl uses visible_sky from shadow_fragment.glsl, but
     # the stock shadow vertex program never writes that varying. Keep the
     # fragment input and supply the missing value from the actual shadow
