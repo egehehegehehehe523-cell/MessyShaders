@@ -165,33 +165,49 @@ def patch(pack: dict[str, bytes]) -> None:
     pack[fragment] = body.replace("computeRealLight(omni_light,",
                                   "computeRealLight(messyOmniLight,").encode("utf-8")
 
-    # Keep stock E-Lite water as a toggleable fallback. Unified mode replaces
-    # both rendered water colors with one inexpensive dark surface model.
-    # Actual near/Voxy geometry remains managed by the respective renderers.
+    # Keep E-Lite's *real* water material. The earlier unified-color shortcut
+    # overwrote the result of refraction(), water_shader() and forced alpha=1,
+    # removing transparency, screen-space reflections and sun glints. Unified
+    # mode now adjusts the material's input and fog without replacing its output.
     water = "shaders/common/water_voxy_blocks_fragment.glsl"
     near_water = "shaders/common/water_blocks_fragment.glsl"
-    unified_near = """    #ifdef MESSY_UNIFIED_WATER
-        if (is_water > 0.5) {
-            vec3 messyBase = WATER_COLOR * MESSY_UNIFIED_WATER_DARKNESS;
-            vec3 messyReflect = sky_color_reflect * visible_sky;
-            block_color.rgb = mix(messyBase, messyReflect,
-                clamp(fresnel * MESSY_UNIFIED_WATER_REFLECTION, 0.0, 0.5));
-            block_color.a = 1.0;
-        }
-    #endif
+    for path, frag_var, color_var, call_prefix in (
+        (near_water, "fresnel", "block_color", "block_color.rgb = water_shader("),
+        (water, "fresnel", "blockColor", "blockColor.rgb = water_shader_voxy("),
+    ):
+        # This input is shared by both vanilla/textured and custom water.
+        src = pack[path].decode("utf-8")
+        anchor = f"    {frag_var} = clamp({frag_var} * MESSY_UNIFIED_WATER_REFLECTION * 4.0, 0.0, 1.0);"
+        # All Fresnel calculations start here, before the stock water paths.
+        fresnel_line = next(line for line in src.splitlines()
+                            if line.strip().startswith("float fresnel = squarePow("))
+        if src.count(fresnel_line) != 1 or src.count(call_prefix) != 2:
+            raise ValueError(f"Unexpected water material layout: {path}")
+        src = src.replace(fresnel_line, fresnel_line +
+                          f"\n    #ifdef MESSY_UNIFIED_WATER\n        {anchor.strip()}\n    #endif", 1)
+        src = src.replace(call_prefix,
+            f"#ifdef MESSY_UNIFIED_WATER\n"
+            f"                {color_var}.rgb *= MESSY_UNIFIED_WATER_DARKNESS;\n"
+            f"            #endif\n\n            " + call_prefix)
+        pack[path] = src.encode("utf-8")
 
-"""
-    unified_far = """    #ifdef MESSY_UNIFIED_WATER
-        if (customId == ENTITY_WATER) {
-            vec3 messyBase = WATER_COLOR * MESSY_UNIFIED_WATER_DARKNESS;
-            vec3 messyReflect = skyColorReflect * visibleSky;
-            blockColor.rgb = mix(messyBase, messyReflect,
-                clamp(fresnel * MESSY_UNIFIED_WATER_REFLECTION, 0.0, 0.5));
-            blockColor.a = 1.0;
-        }
-    #endif
+    # Near E-Lite squares the refraction thickness, while Voxy uses a linear
+    # thickness. Both should use the same extinction law across the handoff.
+    near_lib = "shaders/lib/water.glsl"
+    replace_one(pack, near_lib,
+                "        water_absortion *= water_absortion;",
+                "        #ifndef MESSY_UNIFIED_WATER\n"
+                "            water_absortion *= water_absortion;\n"
+                "        #endif")
 
-"""
+    # Original E-Lite accidentally declares an unpaired fragment varying in
+    # shadow_fragment.glsl. It is never read. Remove it instead of trying to
+    # manufacture visible_sky values in unrelated Colorwheel shader stages.
+    replace_one(pack, "shaders/common/shadow_fragment.glsl",
+                "varying float visible_sky;\n", "")
+
+    unified_near = ""
+    unified_far = ""
     # E-Lite's Voxy horizon fog reaches full strength at vxRenderDistance,
     # independently of the near-water fog. It turns distant water sky blue
     # immediately after the LOD cutover, even if both water shaders output
@@ -199,9 +215,11 @@ def patch(pack: dict[str, bytes]) -> None:
     # final-color paths. Complementary likewise shares water material/depth
     # handling across its GBUFFERS_WATER and VOXY_PATCH programs.
     unified_near += """    #if defined FOG_ACTIVE && defined MESSY_UNIFIED_WATER
-        float messyWaterFog = smoothstep(float(MESSY_WATER_FOG_START),
-            float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
-            gl_FogFragCoord) * MESSY_WATER_FOG_STRENGTH;
+        float messyWaterFog = mix(fog_adj,
+            smoothstep(float(MESSY_WATER_FOG_START),
+                float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
+                gl_FogFragCoord) * MESSY_WATER_FOG_STRENGTH,
+            is_water);
         #define fog_adj messyWaterFog
     #endif
     #include "/src/finalcolor.glsl"
@@ -212,11 +230,13 @@ def patch(pack: dict[str, bytes]) -> None:
         // Override E-Lite's built-in Voxy horizon fog for water only.
         // The previous fog was a function of LOD render distance, not
         // camera distance, and created the visible near/far water seam.
-        frogAdjust = smoothstep(float(MESSY_WATER_FOG_START),
+        float messyWaterFog = smoothstep(float(MESSY_WATER_FOG_START),
             float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
             fogFragCoord) * MESSY_WATER_FOG_STRENGTH;
+        if (customId == ENTITY_WATER) frogAdjust = messyWaterFog;
     #endif
-    #include "/src/finalcolor_voxy.glsl"""
+    #include "/src/finalcolor_voxy.glsl"
+"""
     replace_one(pack, near_water, '    #include "/src/finalcolor.glsl"', unified_near)
     replace_one(pack, water, '    #include "/src/finalcolor_voxy.glsl"', unified_far)
 
