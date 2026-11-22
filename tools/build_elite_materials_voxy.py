@@ -38,7 +38,7 @@ def patch(pack: dict[str, bytes]) -> None:
 
     # Preserve the previous stable default: generated materials do not force
     # LabPBR on. Users may enable authored LabPBR via the original E-Lite menu.
-    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_VOXY_WATER_PARITY // Match near E-Lite water absorption and surface response\n"
+    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_VOXY_WATER_PARITY // Match near E-Lite water absorption and surface response\n#define MESSY_VOXY_WATER_BLEND 0.25 // [0.0 0.1 0.2 0.25 0.35 0.5]\n"
 
     # Restore the last proven materials algorithm: four symmetric taps,
     # screen-footprint filtering and a distance fade. The previous release's
@@ -132,6 +132,29 @@ def patch(pack: dict[str, bytes]) -> None:
                 "            shadow_c_relief *= mix(1.0, messyReliefRatio, smoothstep(0.58, 0.78, light_mix) * 0.8);\n"
                 "        }\n"
                 "    #elif !defined NETHER && defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n        float shadow_c_relief;")
+    # The zero-gloss E-Lite path bypasses shadow_c_relief entirely. It made
+    # generated normals visually disappear on low/very-low profiles.
+    replace_one(pack, fragment,
+                "        vec3 real_light = computeRealLight(omni_light, direct_light_color, directLight2, shadow_c, vec3(0.0), candle_color);",
+                "        #if defined MESSY_AUTO_PBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n"
+                "            vec3 real_light = computeRealLight(omni_light, direct_light_color, shadow_c_relief, shadow_c, vec3(0.0), candle_color);\n"
+                "        #else\n"
+                "            vec3 real_light = computeRealLight(omni_light, direct_light_color, directLight2, shadow_c, vec3(0.0), candle_color);\n"
+                "        #endif")
+    # Sky fill is substantial in E-Lite. A small bounded relief correction
+    # makes the normals visible in shade without changing emissive blocklight.
+    replace_one(pack, fragment,
+                "    // === Block reflection",
+                "    #if defined MESSY_AUTO_PBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n"
+                "        if (foliageData.x < 0.3 && isGrass < 0.5 && light_mix > 0.58) {\n"
+                "            vec3 messySkyUp = normalize((gbufferModelView * vec4(0.0, 1.0, 0.0, 0.0)).xyz);\n"
+                "            float messySkyDiff = dot(normalize(bumpedNormal), messySkyUp) -\n"
+                "                dot(normalize(flat_normal), messySkyUp);\n"
+                "            omni_light *= clamp(1.0 + messySkyDiff * 0.65 *\n"
+                "                smoothstep(0.58, 0.78, light_mix), 0.65, 1.35);\n"
+                "        }\n"
+                "    #endif\n\n"
+                "    // === Block reflection")
 
     # Original E-Lite far-water horizon fog reaches 100% at the *first* LOD
     # boundary. Match its opaque divisor before adding a separate fog control.
@@ -157,6 +180,19 @@ def patch(pack: dict[str, bytes]) -> None:
     replace_one(pack, water_lib,
                 "mix(vec3(0.9, 1.0, 1.0), vec3(0.8, 1.3, 1.6) * 0.9, water_absortion)",
                 "mix(vec3(0.95, 1.0, 1.0), vec3(0.8, 1.1, 1.4) * 0.9, water_absortion)")
+    # The two water renderers cannot literally crossfade geometry without
+    # overlapping meshes. Match reflected sky energy at the first LOD ring,
+    # then fade this small correction away in the following 256 blocks.
+    replace_one(pack, water,
+                '    #include "/src/finalcolor_voxy.glsl"',
+                "    if (customId == ENTITY_WATER) {\n"
+                "        float messyWaterBoundary = float(vxRenderDistance * 16);\n"
+                "        float messyWaterNearWeight = 1.0 - smoothstep(\n"
+                "            messyWaterBoundary, messyWaterBoundary + 256.0, fogFragCoord);\n"
+                "        blockColor.rgb = mix(blockColor.rgb, skyColorReflect * visibleSky,\n"
+                "            MESSY_VOXY_WATER_BLEND * messyWaterNearWeight);\n"
+                "    }\n"
+                '    #include "/src/finalcolor_voxy.glsl"')
     # Depth-based opacity can be tuned if different Voxy depth precision still
     # gives a visible seam; do not inject a second alpha/dither crossfade.
 
@@ -182,7 +218,7 @@ def patch(pack: dict[str, bytes]) -> None:
     replace_one(pack, props,
                 "screen.RENDER_SCREEN= AA_TYPE FXAA FOG_ACTIVE FOG_ADJUST NEAR_FOG FOG_TINT NETHER_FOG_DISTANCE FOLIAGE_V <empty> <empty> PERF_IMPACT",
                 "screen.RENDER_SCREEN= AA_TYPE FXAA FOG_ACTIVE FOG_ADJUST NEAR_FOG FOG_TINT NETHER_FOG_DISTANCE FOLIAGE_V [MESSY_VOXY_SCREEN] <empty> PERF_IMPACT\n"
-                "screen.MESSY_VOXY_SCREEN= MESSY_VOXY_FOG MESSY_VOXY_FOG_START MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH")
+                "screen.MESSY_VOXY_SCREEN= MESSY_VOXY_FOG MESSY_VOXY_FOG_START MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_VOXY_WATER_BLEND")
     replace_one(pack, props,
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE POM_DEPTH POM_STEPS SS_SAMPLES",
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE POM_DEPTH POM_STEPS SS_SAMPLES")
@@ -192,8 +228,8 @@ def patch(pack: dict[str, bytes]) -> None:
     replace_one(pack, props, "sliders = ",
                 "sliders = MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION "
                 "MESSY_AUTO_PBR_DISTANCE MESSY_VOXY_FOG_START "
-                "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH ")
-    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
+                "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_VOXY_WATER_BLEND ")
+    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_VOXY_WATER_BLEND=Voxy Water Sky Blend\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
 
     # E-Lite's Voxy patch manifest refers to a Minecraft 1.21.9 uniform.
     replace_one(pack, "shaders/common/voxy.json", '    "endFlashIntensity",',
