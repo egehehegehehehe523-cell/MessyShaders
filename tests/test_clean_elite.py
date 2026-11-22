@@ -20,7 +20,7 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/water_voxy_blocks_fragment.glsl",
             "shaders/common/water_blocks_fragment.glsl",
             "shaders/lib/water.glsl",
-            "shaders/common/shadow_fragment.glsl",
+            "shaders/common/shadow_vertex.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
             "shaders/clrwl_shadow.vsh", "shaders/clrwl_shadow.fsh",
@@ -47,8 +47,12 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn("out vec2 messyShadowUV;", shadow_vertex)
         self.assertIn("in vec2 messyShadowUV;", shadow_fragment)
         self.assertIn("clrwl_computeFragment", shadow_fragment)
-        self.assertNotIn(b"varying float visible_sky;",
-                         pack["shaders/common/shadow_fragment.glsl"])
+        self.assertIn(b"varying float visible_sky;",
+                      pack["shaders/common/shadow_fragment.glsl"])
+        self.assertIn(b"varying float visible_sky;",
+                      pack["shaders/common/shadow_vertex.glsl"])
+        self.assertIn(b"visible_sky = clamp(gl_MultiTexCoord1.y / 240.0",
+                      pack["shaders/common/shadow_vertex.glsl"])
         self.assertIn(b"#define fog_adj messyWaterFog", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"float messyWaterFog = smoothstep(float(MESSY_WATER_FOG_START)",
                       pack["shaders/common/water_voxy_blocks_fragment.glsl"])
