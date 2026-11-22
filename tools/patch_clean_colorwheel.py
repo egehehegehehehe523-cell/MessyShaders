@@ -37,9 +37,13 @@ void main() {
 """,
     "shaders/clrwl_shadow.vsh": """#version 430 compatibility
 out vec2 messyUV;
+// Colorwheel's generated shadow material stage consumes this varying.
+// It must be emitted by the preceding vertex stage for successful linking.
+out float visible_sky;
 void main() {
     gl_Position = ftransform();
     messyUV = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+    visible_sky = 1.0;
 }
 """,
     "shaders/clrwl_shadow.fsh": """#version 430 compatibility
