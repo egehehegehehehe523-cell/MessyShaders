@@ -19,8 +19,11 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/solid_voxy_blocks_fragment.glsl",
             "shaders/common/water_voxy_blocks_fragment.glsl",
             "shaders/common/water_blocks_fragment.glsl",
+            "shaders/lib/water.glsl",
+            "shaders/common/shadow_fragment.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
+            "shaders/clrwl_shadow.vsh", "shaders/clrwl_shadow.fsh",
             "shaders/colorwheel.properties",
         })
         self.assertNotIn("messyRgb", b"".join(pack.values()).decode("utf-8", "ignore"))
@@ -38,13 +41,21 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
-        # Colorwheel's shadow program is optional. The old program failed
-        # linkage on its generated material stage's visible_sky varying.
-        self.assertNotIn("shaders/clrwl_shadow.vsh", pack)
-        self.assertNotIn("shaders/clrwl_shadow.fsh", pack)
+        shadow_vertex = pack["shaders/clrwl_shadow.vsh"].decode()
+        shadow_fragment = pack["shaders/clrwl_shadow.fsh"].decode()
+        self.assertIn("SHADOW_DIST * messyShadowFalloff", shadow_vertex)
+        self.assertIn("out vec2 messyShadowUV;", shadow_vertex)
+        self.assertIn("in vec2 messyShadowUV;", shadow_fragment)
+        self.assertIn("clrwl_computeFragment", shadow_fragment)
+        self.assertNotIn(b"varying float visible_sky;",
+                         pack["shaders/common/shadow_fragment.glsl"])
         self.assertIn(b"#define fog_adj messyWaterFog", pack["shaders/common/water_blocks_fragment.glsl"])
-        self.assertIn(b"frogAdjust = smoothstep(float(MESSY_WATER_FOG_START)",
+        self.assertIn(b"float messyWaterFog = smoothstep(float(MESSY_WATER_FOG_START)",
                       pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertIn(b'#include "/src/finalcolor_voxy.glsl"',
+                      pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertNotIn(b"block_color.a = 1.0;", pack["shaders/common/water_blocks_fragment.glsl"])
+        self.assertNotIn(b"blockColor.a = 1.0;", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
 
 
 if __name__ == "__main__":
