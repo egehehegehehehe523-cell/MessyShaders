@@ -18,6 +18,7 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/solid_blocks_vertex.glsl",
             "shaders/common/solid_voxy_blocks_fragment.glsl",
             "shaders/common/water_voxy_blocks_fragment.glsl",
+            "shaders/common/water_blocks_fragment.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
             "shaders/clrwl_shadow.vsh", "shaders/clrwl_shadow.fsh",
@@ -36,6 +37,8 @@ class CleanEliteTest(unittest.TestCase):
         self.assertEqual(pack["shaders/lib/water_voxy.glsl"],
                          base["shaders/lib/water_voxy.glsl"])
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
+        self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_blocks_fragment.glsl"])
+        self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         shadow_vertex = pack["shaders/clrwl_shadow.vsh"].decode()
         self.assertIn("out float visible_sky;", shadow_vertex)
         self.assertIn("visible_sky = 1.0;", shadow_vertex)
