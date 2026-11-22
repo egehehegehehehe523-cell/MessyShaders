@@ -145,16 +145,24 @@ def patch(pack: dict[str, bytes]) -> None:
     # makes the normals visible in shade without changing emissive blocklight.
     replace_one(pack, fragment,
                 "    // === Block reflection",
+                "    vec3 messyOmniLight = omni_light;\n"
                 "    #if defined MESSY_AUTO_PBR && !defined LabPBR && (defined GBUFFER_TERRAIN || defined GBUFFER_BLOCK)\n"
                 "        if (foliageData.x < 0.3 && isGrass < 0.5 && light_mix > 0.58) {\n"
                 "            vec3 messySkyUp = normalize((gbufferModelView * vec4(0.0, 1.0, 0.0, 0.0)).xyz);\n"
                 "            float messySkyDiff = dot(normalize(bumpedNormal), messySkyUp) -\n"
                 "                dot(normalize(flat_normal), messySkyUp);\n"
-                "            omni_light *= clamp(1.0 + messySkyDiff * 0.65 *\n"
+                "            messyOmniLight *= clamp(1.0 + messySkyDiff * 0.65 *\n"
                 "                smoothstep(0.58, 0.78, light_mix), 0.65, 1.35);\n"
                 "        }\n"
                 "    #endif\n\n"
                 "    // === Block reflection")
+    # Fragment varyings are read-only in GLSL. Feed the corrected local copy
+    # to all three E-Lite illumination branches instead of assigning to it.
+    body = pack[fragment].decode("utf-8")
+    if body.count("computeRealLight(omni_light,") != 3:
+        raise ValueError("Unexpected native E-Lite illumination branches")
+    pack[fragment] = body.replace("computeRealLight(omni_light,",
+                                  "computeRealLight(messyOmniLight,").encode("utf-8")
 
     # Original E-Lite far-water horizon fog reaches 100% at the *first* LOD
     # boundary. Match its opaque divisor before adding a separate fog control.
