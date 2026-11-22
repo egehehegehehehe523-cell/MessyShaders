@@ -39,7 +39,7 @@ def patch(pack: dict[str, bytes]) -> None:
 
     # Preserve the previous stable default: generated materials do not force
     # LabPBR on. Users may enable authored LabPBR via the original E-Lite menu.
-    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_UNIFIED_WATER // Same inexpensive surface palette for near and Voxy water\n#define MESSY_UNIFIED_WATER_DARKNESS 0.65 // [0.35 0.5 0.65 0.8 1.0]\n#define MESSY_UNIFIED_WATER_REFLECTION 0.25 // [0.0 0.1 0.2 0.25 0.35 0.5]\n"
+    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_UNIFIED_WATER // Same inexpensive surface palette for near and Voxy water\n#define MESSY_UNIFIED_WATER_DARKNESS 0.65 // [0.35 0.5 0.65 0.8 1.0]\n#define MESSY_UNIFIED_WATER_REFLECTION 0.25 // [0.0 0.1 0.2 0.25 0.35 0.5]\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n"
 
     # Restore the last proven materials algorithm: four symmetric taps,
     # screen-footprint filtering and a distance fade. The previous release's
@@ -192,10 +192,33 @@ def patch(pack: dict[str, bytes]) -> None:
     #endif
 
 """
-    replace_one(pack, near_water, '    #include "/src/finalcolor.glsl"',
-                unified_near + '    #include "/src/finalcolor.glsl"')
-    replace_one(pack, water, '    #include "/src/finalcolor_voxy.glsl"',
-                unified_far + '    #include "/src/finalcolor_voxy.glsl"')
+    # E-Lite's Voxy horizon fog reaches full strength at vxRenderDistance,
+    # independently of the near-water fog. It turns distant water sky blue
+    # immediately after the LOD cutover, even if both water shaders output
+    # identical surface colors. Use a single camera-distance fog law for both
+    # final-color paths. Complementary likewise shares water material/depth
+    # handling across its GBUFFERS_WATER and VOXY_PATCH programs.
+    unified_near += """    #if defined FOG_ACTIVE && defined MESSY_UNIFIED_WATER
+        float messyWaterFog = smoothstep(float(MESSY_WATER_FOG_START),
+            float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
+            gl_FogFragCoord) * MESSY_WATER_FOG_STRENGTH;
+        #define fog_adj messyWaterFog
+    #endif
+    #include "/src/finalcolor.glsl"
+    #if defined FOG_ACTIVE && defined MESSY_UNIFIED_WATER
+        #undef fog_adj
+    #endif"""
+    unified_far += """    #ifdef MESSY_UNIFIED_WATER
+        // Override E-Lite's built-in Voxy horizon fog for water only.
+        // The previous fog was a function of LOD render distance, not
+        // camera distance, and created the visible near/far water seam.
+        frogAdjust = smoothstep(float(MESSY_WATER_FOG_START),
+            float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
+            fogFragCoord) * MESSY_WATER_FOG_STRENGTH;
+    #endif
+    #include "/src/finalcolor_voxy.glsl"""
+    replace_one(pack, near_water, '    #include "/src/finalcolor.glsl"', unified_near)
+    replace_one(pack, water, '    #include "/src/finalcolor_voxy.glsl"', unified_far)
 
     # Fog is computed in the Voxy fragment shaders, where distant LOD depth
     # is available. No changes to vanilla fog or Minecraft/Voxy mixins.
@@ -225,12 +248,12 @@ def patch(pack: dict[str, bytes]) -> None:
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE POM_DEPTH POM_STEPS SS_SAMPLES")
     replace_one(pack, props, "[LabPBR] [INFO_SCREEN]",
                 "[LabPBR] [MESSY_FEATURES] [INFO_SCREEN]")
-    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_UNIFIED_WATER MESSY_UNIFIED_WATER_DARKNESS MESSY_UNIFIED_WATER_REFLECTION\n"
+    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_UNIFIED_WATER MESSY_UNIFIED_WATER_DARKNESS MESSY_UNIFIED_WATER_REFLECTION MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH\n"
     replace_one(pack, props, "sliders = ",
                 "sliders = MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION "
                 "MESSY_AUTO_PBR_DISTANCE MESSY_VOXY_FOG_START "
-                "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_UNIFIED_WATER_DARKNESS MESSY_UNIFIED_WATER_REFLECTION ")
-    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Unified Water\noption.MESSY_UNIFIED_WATER=Unified Simple Water\noption.MESSY_UNIFIED_WATER_DARKNESS=Unified Water Darkness\noption.MESSY_UNIFIED_WATER_REFLECTION=Unified Water Reflection\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=Apply Automatic Materials to Entities\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
+                "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_UNIFIED_WATER_DARKNESS MESSY_UNIFIED_WATER_REFLECTION MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH ")
+    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Unified Water\noption.MESSY_UNIFIED_WATER=Unified Simple Water\noption.MESSY_UNIFIED_WATER_DARKNESS=Unified Water Darkness\noption.MESSY_UNIFIED_WATER_REFLECTION=Unified Water Reflection\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=Apply Automatic Materials to Entities\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
 
     # E-Lite's Voxy patch manifest refers to a Minecraft 1.21.9 uniform.
     replace_one(pack, "shaders/common/voxy.json", '    "endFlashIntensity",',
