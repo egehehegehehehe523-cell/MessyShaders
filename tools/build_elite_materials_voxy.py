@@ -200,11 +200,18 @@ def patch(pack: dict[str, bytes]) -> None:
                 "            water_absortion *= water_absortion;\n"
                 "        #endif")
 
-    # Original E-Lite accidentally declares an unpaired fragment varying in
-    # shadow_fragment.glsl. It is never read. Remove it instead of trying to
-    # manufacture visible_sky values in unrelated Colorwheel shader stages.
-    replace_one(pack, "shaders/common/shadow_fragment.glsl",
-                "varying float visible_sky;\n", "")
+    # E-Lite's caustics.glsl uses visible_sky from shadow_fragment.glsl, but
+    # the stock shadow vertex program never writes that varying. Keep the
+    # fragment input and supply the missing value from the actual shadow
+    # vertex program, including shadow_terrain_cutout and related variants.
+    shadow_vertex = "shaders/common/shadow_vertex.glsl"
+    replace_one(pack, shadow_vertex,
+                "varying float is_water;",
+                "varying float is_water;\nvarying float visible_sky;")
+    replace_one(pack, shadow_vertex,
+                "    texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;",
+                "    texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;\n"
+                "    visible_sky = clamp(gl_MultiTexCoord1.y / 240.0, 0.0, 1.0);")
 
     unified_near = ""
     unified_far = ""
