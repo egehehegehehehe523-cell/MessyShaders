@@ -20,6 +20,7 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/water_voxy_blocks_fragment.glsl",
             "shaders/common/water_blocks_fragment.glsl",
             "shaders/lib/water.glsl",
+            "shaders/lib/water_voxy.glsl",
             "shaders/common/shadow_vertex.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
@@ -36,8 +37,11 @@ class CleanEliteTest(unittest.TestCase):
         self.assertNotIn("omni_light *=", fragment)
         self.assertEqual(fragment.count("computeRealLight(messyOmniLight,"), 3)
         self.assertIn(b"screen.MESSY_FEATURES", pack["shaders/shaders.properties"])
-        self.assertEqual(pack["shaders/lib/water_voxy.glsl"],
-                         base["shaders/lib/water_voxy.glsl"])
+        self.assertIn(b"vxDepthTexOpaque", pack["shaders/lib/water_voxy.glsl"])
+        self.assertIn(b"vxDepthTexOpaque", pack["shaders/lib/water.glsl"])
+        self.assertIn(b"vxProjInv", pack["shaders/lib/water_voxy.glsl"])
+        self.assertIn(b'"vxDepthTexOpaque": "sampler2D"',
+                      pack["shaders/common/voxy.json"])
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
