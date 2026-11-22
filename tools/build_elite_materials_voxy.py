@@ -160,7 +160,7 @@ def patch(pack: dict[str, bytes]) -> None:
 
     # Preserve the previous stable default: generated materials do not force
     # LabPBR on. Users may enable authored LabPBR via the original E-Lite menu.
-    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_WATER_PARITY // Match near and Voxy water absorption, depth and fog\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n#define MESSY_WATER_DEBUG 0 // [0 1 2 3 4] 0: Off, 1: Opacity, 2: Surface, 3: Reflection, 4: Render handoff\n"
+    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_WATER_PARITY // Match near and Voxy water absorption, depth and fog\n#define MESSY_WATER_LIGHT_HANDOFF // Blend vanilla water into the same distant lighting used by Voxy\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n#define MESSY_WATER_DEBUG 0 // [0 1 2 3 4] 0: Off, 1: Opacity, 2: Surface, 3: Reflection, 4: Render handoff\n"
 
     # Restore the last proven materials algorithm: four symmetric taps,
     # screen-footprint filtering and a distance fade. The previous release's
@@ -361,6 +361,39 @@ float messyWaterDistanceFog(float cameraDistance) {
         cameraDistance) * MESSY_WATER_FOG_STRENGTH;
 }
 
+// Vanilla water calculates illumination in light_vertex.glsl; Voxy does it
+// later from its LOD voxel light map with different sky/daylight constants.
+// The diagnostic isolated this as the last visible chunk-shaped difference.
+// This distant-ocean light is camera-independent: both renderers get exactly
+// the same value at the handoff, with ordinary near-water light left intact.
+vec3 messyWaterDistantLight(int ticks, float rain) {
+    float moment = fract(float(ticks) * (1.0 / 24000.0));
+    float dayMix = clamp(1.25 - 20.0 * (moment - 0.25) * (moment - 0.25), 0.0, 1.0);
+    float nightMix = clamp(3.125 - 50.0 * (moment - 0.75) * (moment - 0.75), 0.0, 1.0);
+    float nightTransition = smoothstep(0.45, 0.52, moment);
+    vec3 direct = mix(
+        mix(LIGHT_SUNSET_COLOR, LIGHT_DAY_COLOR, dayMix),
+        mix(LIGHT_SUNSET_COLOR, LIGHT_NIGHT_COLOR, nightMix), nightTransition);
+    vec3 zenith = mix(
+        mix(ZENITH_SUNSET_COLOR, ZENITH_DAY_COLOR, dayMix),
+        mix(ZENITH_SUNSET_COLOR, ZENITH_NIGHT_COLOR, nightMix), nightTransition);
+    zenith = mix(zenith, ZENITH_SKY_RAIN_COLOR * luma(zenith), rain);
+    direct = mix(direct, ZENITH_SKY_RAIN_COLOR * luma(direct) * 0.6, rain);
+    float directStrength = max(dayMix, nightMix);
+    #if COLOR_SCHEME == 2 || COLOR_SCHEME == 6
+        vec3 omni = mix(zenith * vec3(0.666, 1.0, 1.0) *
+            mix(3.5, 4.5, dayMix) * OMNI_MUL,
+            direct * mix(2.0, 0.35, dayMix) * OMNI_MUL, OMNI_TINT);
+    #elif COLOR_SCHEME == 4
+        vec3 omni = direct * (OMNI_MUL + 0.7);
+    #else
+        vec3 omni = mix(zenith, direct * 0.45, OMNI_TINT) * (OMNI_MUL + 0.7);
+    #endif
+    return max(omni, vec3(AVOID_DARK_LEVEL * 0.01)) *
+        (1.0 + directStrength * 0.05) +
+        direct * directStrength * (1.0 - rain * 0.75);
+}
+
 // Use one water normal field for both renderers. Voxy and vanilla previously
 // differed in their rain attenuation and sky-visibility terms.
 vec3 messyWaterWaves(vec3 pos, float visibleSky, float rain,
@@ -463,6 +496,34 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     replace_one(pack, water,
                 "normal_waves_voxy(worldposition.xzy)",
                 "normal_waves_voxy(worldposition.xzy, visibleSky)")
+    # In the diagnostic's surface-only mode, sky reflection and opacity were
+    # continuous but the raw lit WATER_COLOR had a square Voxy boundary.
+    # Near uses vertex-lit E-Lite water; Voxy uses independently reconstructed
+    # voxel lights and different colour coefficients. Preserve vanilla lighting
+    # near the camera, then fade to an identical camera-independent ocean light
+    # well before the chunk handoff. Voxy always uses that exact same light.
+    replace_one(pack, near_water,
+                "            #if WATER_COLOR_SOURCE == 0\n"
+                "                block_color.rgb = water_texture * real_light * WATER_COLOR;",
+                """            #if defined MESSY_WATER_PARITY && defined VOXY && defined MESSY_WATER_LIGHT_HANDOFF
+                float messyLightingDistance = length(fragposition);
+                if (messyLightingDistance > far * 0.5) {
+                    float messyHandoff = smoothstep(far * 0.5, far * 0.9,
+                        messyLightingDistance);
+                    real_light = mix(real_light,
+                        messyWaterDistantLight(worldTime, rainStrength), messyHandoff);
+                }
+            #endif
+            #if WATER_COLOR_SOURCE == 0
+                block_color.rgb = water_texture * real_light * WATER_COLOR;""")
+    replace_one(pack, water,
+                "            #if WATER_COLOR_SOURCE == 0\n"
+                "                blockColor.rgb = waterTexture * realLight * WATER_COLOR;",
+                """            #if defined MESSY_WATER_PARITY && defined MESSY_WATER_LIGHT_HANDOFF
+                realLight = messyWaterDistantLight(worldTime, rainStrength);
+            #endif
+            #if WATER_COLOR_SOURCE == 0
+                blockColor.rgb = waterTexture * realLight * WATER_COLOR;""")
     replace_one(pack, far_lib,
                 "    bump *= vec3(NdotE) + vec3(0.0, 0.0, 1.0 - NdotE);",
                 "    bump *= vec3(NdotE) + vec3(0.05, 0.1, 1.0 - NdotE);")
@@ -653,12 +714,12 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE POM_DEPTH POM_STEPS SS_SAMPLES")
     replace_one(pack, props, "[LabPBR] [INFO_SCREEN]",
                 "[LabPBR] [MESSY_FEATURES] [INFO_SCREEN]")
-    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_WATER_DEBUG MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH\n"
+    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_WATER_LIGHT_HANDOFF MESSY_WATER_DEBUG MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH\n"
     replace_one(pack, props, "sliders = ",
                 "sliders = MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION "
                 "MESSY_AUTO_PBR_DISTANCE MESSY_VOXY_FOG_START "
                 "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH ")
-    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Unlit Surface\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=Apply Automatic Materials to Entities\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
+    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_LIGHT_HANDOFF=Match Distant Water Lighting\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Unlit Surface\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=Apply Automatic Materials to Entities\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
 
     # E-Lite's Voxy patch manifest refers to a Minecraft 1.21.9 uniform.
     replace_one(pack, "shaders/common/voxy.json", '    "endFlashIntensity",',
