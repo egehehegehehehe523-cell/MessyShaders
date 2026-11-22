@@ -30,6 +30,9 @@ class CleanEliteTest(unittest.TestCase):
             self.assertIn(b"MESSY_VOXY_FOG_START", pack[path])
             self.assertIn(b"MESSY_VOXY_FOG_SPAN", pack[path])
         self.assertIn(b"MESSY_AUTO_PBR", pack["shaders/common/solid_blocks_fragment.glsl"])
+        fragment = pack["shaders/common/solid_blocks_fragment.glsl"].decode()
+        self.assertNotIn("omni_light *=", fragment)
+        self.assertEqual(fragment.count("computeRealLight(messyOmniLight,"), 3)
         self.assertIn(b"screen.MESSY_FEATURES", pack["shaders/shaders.properties"])
         self.assertIn(b"water_absortion *= water_absortion;", pack["shaders/lib/water_voxy.glsl"])
 
