@@ -9,7 +9,17 @@ import argparse
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
-from build_fast_rgb import ROOT, SOURCE, read_source
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE = ROOT / "§lE-LITE shaders 5.1.3.zip"
+
+
+def read_source(source: Path) -> dict[str, bytes]:
+    with ZipFile(source) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()
+                 if name.startswith("shaders/") and not name.endswith("/")}
+    if "shaders/shaders.properties" not in files:
+        raise ValueError("E-Lite shaders root not found")
+    return files
 
 
 def replace_one(pack: dict[str, bytes], path: str, old: str, new: str) -> None:
