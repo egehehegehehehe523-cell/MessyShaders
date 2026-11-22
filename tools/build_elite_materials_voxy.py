@@ -216,6 +216,60 @@ def patch(pack: dict[str, bytes]) -> None:
     # The legacy #elif VOXY branch is guarded by the outer #else above, so
     # it remains available when the unified water option is disabled.
     far_lib = "shaders/lib/water_voxy.glsl"
+    # Both renderers previously defined "transparent" differently: regular
+    # water precomposited sampled gaux1 into an opaque pixel, whereas Voxy
+    # water framebuffer-blended partially transparent pixels. Share the same
+    # extinction law and source-over compositor on both geometry paths.
+    shared_water = "shaders/lib/messy_water_composite.glsl"
+    pack[shared_water] = b"""#ifndef MESSY_WATER_COMPOSITE_GLSL
+#define MESSY_WATER_COMPOSITE_GLSL
+
+float messyWaterOpacity(float thickness) {
+    return clamp(1.0 - 1.0 / (max(thickness, 0.0) * WATER_ABSORPTION + 1.33),
+        0.0, 1.0);
+}
+
+// E-Lite's unmodified water_shader() linearly combines an absorption-weighted
+// surface, a Fresnel reflection and sunlight. Move those contributions into
+// an alpha source, leaving the actual background to the framebuffer blend.
+vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) {
+    float reflection = clamp(fresnel * REFLEX_INDEX, 0.0, 1.0);
+    float absorption = clamp(opacity, 0.0, 1.0);
+    float alpha = absorption + (1.0 - absorption) * reflection;
+    vec3 premultiplied = shaded - (1.0 - reflection) *
+        (1.0 - absorption) * surface;
+    return vec4(premultiplied / max(alpha, 0.001), alpha);
+}
+
+#endif
+"""
+    replace_one(pack, near_water,
+                '#include "/lib/water.glsl"',
+                '#include "/lib/messy_water_composite.glsl"\n#include "/lib/water.glsl"')
+    replace_one(pack, water,
+                '#include "/lib/water_voxy.glsl"',
+                '#include "/lib/messy_water_composite.glsl"\n#include "/lib/water_voxy.glsl"')
+    replace_one(pack, near_lib,
+                "vec3 refraction(vec3 fragpos, vec3 color, vec3 refraction) {",
+                "vec3 refraction(vec3 fragpos, vec3 color, vec3 refraction, out float waterAlpha) {")
+    replace_one(pack, near_lib,
+                "        water_absortion = (1.0 / -((water_absortion * WATER_ABSORPTION) + 1.33)) + 1.0;",
+                "        water_absortion = messyWaterOpacity(water_absortion);")
+    replace_one(pack, near_water,
+                "            block_color = vec4(refraction(fragposition, block_color.rgb, water_normal_base), 1.0);",
+                "            float messyWaterAbsorption;\n"
+                "            block_color = vec4(refraction(fragposition, block_color.rgb, "
+                "water_normal_base, messyWaterAbsorption), 1.0);")
+    replace_one(pack, near_water,
+                "            block_color.rgb = water_shader(fragposition, surface_normal * normalfactor, block_color.rgb, sky_color_reflect, fresnel, visible_sky, dither, dirLight.rgb);",
+                "            #if defined MESSY_WATER_PARITY && defined VOXY\n"
+                "                vec3 messyWaterSurface = block_color.rgb;\n"
+                "            #endif\n"
+                "            block_color.rgb = water_shader(fragposition, surface_normal * normalfactor, block_color.rgb, sky_color_reflect, fresnel, visible_sky, dither, dirLight.rgb);\n"
+                "            #if defined MESSY_WATER_PARITY && defined VOXY\n"
+                "                block_color = messyWaterCompose(block_color.rgb, "
+                "messyWaterSurface, messyWaterAbsorption, fresnel);\n"
+                "            #endif")
     replace_one(pack, far_lib,
                 "    const float vxNear = 16.0;\n    const float vxFar  = 48000.0;",
                 """    #ifndef MESSY_WATER_PARITY
@@ -236,6 +290,9 @@ def patch(pack: dict[str, bytes]) -> None:
                 "        water_absortion = max(earth_distance - water_distance, 0.0);",
                 """        #endif
         water_absortion = max(earth_distance - water_distance, 0.0);""")
+    replace_one(pack, far_lib,
+                "        water_absortion = (1.0 / -((water_absortion * WATER_ABSORPTION) + 1.33)) + 1.0;",
+                "        water_absortion = messyWaterOpacity(water_absortion);")
     # Even with identical optical depth, E-Lite subtly changes the normal
     # basis and wave amplitude at the Voxy handoff. Match the near-water math
     # to prevent a narrow reflection/surface-texture discontinuity.
@@ -276,19 +333,8 @@ def patch(pack: dict[str, bytes]) -> None:
             #endif
             blockColor.rgb = water_shader_voxy(fragposition, surfaceNormal * normalfactor, blockColor.rgb, skyColorReflect, fresnel, visibleSky, directLightColor, lmcoord);
             #ifdef MESSY_WATER_PARITY
-                // Stock E-Lite RGB = (1-f)*mix(background, surface, a)
-                //                  + f*reflection + sunlight.
-                // With GPU alpha blending, move only the surface/reflection
-                // contributions to the source and let the destination supply
-                // the actual background. This avoids refraction being mixed
-                // twice and preserves specular energy at glancing angles.
-                float messyFresnel = clamp(fresnel * REFLEX_INDEX, 0.0, 1.0);
-                float messyBlendAlpha = clamp(messyWaterAbsorption +
-                    (1.0 - messyWaterAbsorption) * messyFresnel, 0.0, 1.0);
-                blockColor.rgb = (blockColor.rgb -
-                    (1.0 - messyFresnel) * (1.0 - messyWaterAbsorption) *
-                    messyWaterSurface) / max(messyBlendAlpha, 0.001);
-                blockColor.a = messyBlendAlpha;
+                blockColor = messyWaterCompose(blockColor.rgb, messyWaterSurface,
+                    messyWaterAbsorption, fresnel);
             #endif""")
     replace_one(pack, near_lib,
                 "    return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.95, 1.0, 1.0), vec3(0.8, 1.1, 1.4) * 0.9, water_absortion), color, water_absortion);",
@@ -299,6 +345,13 @@ def patch(pack: dict[str, bytes]) -> None:
         return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.95, 1.0, 1.0),
             vec3(0.8, 1.1, 1.4) * 0.9, water_absortion), color, water_absortion);
     #endif""")
+    replace_one(pack, near_lib,
+                "    #ifdef MESSY_WATER_PARITY\n        return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.9, 1.0, 1.0),",
+                "    waterAlpha = clamp(water_absortion, 0.0, 1.0);\n"
+                "    #if defined MESSY_WATER_PARITY && defined VOXY\n"
+                "        return color;\n"
+                "    #elif defined MESSY_WATER_PARITY\n"
+                "        return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.9, 1.0, 1.0),")
     voxy_json = "shaders/common/voxy.json"
     replace_one(pack, voxy_json,
                 '    "vxDepthTexTrans": "sampler2D"',
@@ -315,6 +368,13 @@ def patch(pack: dict[str, bytes]) -> None:
                 '    0: "SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA"\n'
                 '  },\n'
                 '  "opaqueDrawBuffers": [1, 4],')
+    # Complementary enables this same blend rule for both regular
+    # gbuffers_water and Voxy translucency. Do not turn it off for vanilla
+    # water: the shader also handles glass and ice in this pass.
+    replace_one(pack, props,
+                'blend.dh_water=SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA',
+                'blend.gbuffers_water=SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA\n'
+                'blend.dh_water=SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA')
 
     # E-Lite's caustics.glsl uses visible_sky from shadow_fragment.glsl, but
     # the stock shadow vertex program never writes that varying. Keep the
