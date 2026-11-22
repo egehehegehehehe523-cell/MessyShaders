@@ -29,6 +29,127 @@ def replace_one(pack: dict[str, bytes], path: str, old: str, new: str) -> None:
     pack[path] = src.replace(old, new, 1).encode("utf-8")
 
 
+def patch_cloud_occlusion(pack: dict[str, bytes]) -> None:
+    """Depth-limit clouds against Voxy's opaque LOD surface.
+
+    Vanilla depth deliberately excludes Voxy's LODs. A sky-only test using
+    depthtex0 therefore isn't enough: behind-hill cloud samples overwrite
+    the already-composited distant geometry. Clip each ray step to Voxy depth,
+    keeping legitimate cloud samples *in front* of a distant mountain.
+    """
+    deferred = "shaders/common/deferred_fragment.glsl"
+    replace_one(pack, deferred,
+                "#ifdef VOXY\n    uniform sampler2D vxDepthTexTrans;\n#endif",
+                "#ifdef VOXY\n    uniform sampler2D vxDepthTexTrans;\n"
+                "    uniform sampler2D vxDepthTexOpaque;\n"
+                "    uniform mat4 vxProjInv;\n#endif")
+    replace_one(pack, deferred,
+                "            #else\n                block_color.rgb = get_cloud(view_vector, block_color.rgb, bright, dither, cameraPosition, CLOUD_STEPS_AVG, umbral, cloud_color, dark_cloud_color, dynamicValue, cave_influence);\n            #endif",
+                """            #else
+                float messyCloudOcclusionDistance = 1.0e7;
+                #ifdef VOXY
+                    float messyTerrainDepth = texture2DLod(vxDepthTexOpaque,
+                        texcoord * RENDER_SCALE, 0).r;
+                    if (messyTerrainDepth < 0.999999) {
+                        vec4 messyTerrainView = vxProjInv * vec4(
+                            texcoord * 2.0 - 1.0, messyTerrainDepth * 2.0 - 1.0, 1.0);
+                        messyCloudOcclusionDistance = length(
+                            messyTerrainView.xyz / messyTerrainView.w);
+                    }
+                #endif
+                // If the opaque surface is before the cloud layer, skip the
+                // entire shader (including its pre-cloud brightness tweak).
+                float messyCloudEntry = max(0.0,
+                    (CLOUD_PLANE - cameraPosition.y) / max(view_vector.y, 0.0001));
+                if (messyCloudOcclusionDistance > messyCloudEntry) {
+                    block_color.rgb = get_cloud(view_vector, block_color.rgb, bright,
+                        dither, cameraPosition, CLOUD_STEPS_AVG, umbral, cloud_color,
+                        dark_cloud_color, dynamicValue, cave_influence,
+                        messyCloudOcclusionDistance);
+                }
+            #endif""")
+
+    clouds = "shaders/lib/volumetric_clouds.glsl"
+    replace_one(pack, clouds,
+                "float dynamicValue, float cave) {",
+                "float dynamicValue, float cave, float maxCloudDistance) {")
+    replace_one(pack, clouds,
+                "    bool first_contact = true;",
+                "    bool first_contact = true;\n    float messyCloudStart;\n"
+                "    float messySampleDistance;")
+    replace_one(pack, clouds, "    float density;", "    float density = 0.0;")
+    replace_one(pack, clouds, "        float density_2;", "        float density_2 = 0.0;")
+    replace_one(pack, clouds,
+                "        plane_distance = (CLOUD_PLANE - base_pos.y) * view_y_inv;\n"
+                "        intersection_pos = (view_vector * plane_distance) + base_pos;",
+                "        plane_distance = (CLOUD_PLANE - base_pos.y) * view_y_inv;\n"
+                "        messyCloudStart = plane_distance;\n"
+                "        intersection_pos = (view_vector * plane_distance) + base_pos;")
+    replace_one(pack, clouds,
+                "        intersection_pos += (increment * dither);\n\n"
+                "        for (int i = 0; i < samples + sample_fix; i++) {",
+                "        intersection_pos += (increment * dither);\n"
+                "        messySampleDistance = messyCloudStart + increment_dist * dither;\n\n"
+                "        for (int i = 0; i < samples + sample_fix; i++) {\n"
+                "            if (messySampleDistance >= maxCloudDistance) break;")
+    replace_one(pack, clouds,
+                "            intersection_pos += increment;\n        }",
+                "            intersection_pos += increment;\n"
+                "            messySampleDistance += increment_dist;\n        }")
+    replace_one(pack, clouds,
+                "            plane_distance = (CLOUD_PLANE_2 - base_pos.y) * view_y_inv;\n"
+                "            intersection_pos_2 = (view_vector * plane_distance) + base_pos;",
+                "            plane_distance = (CLOUD_PLANE_2 - base_pos.y) * view_y_inv;\n"
+                "            messyCloudStart = plane_distance;\n"
+                "            intersection_pos_2 = (view_vector * plane_distance) + base_pos;")
+    replace_one(pack, clouds,
+                "            intersection_pos_2 += (increment_2 * dither);\n\n"
+                "            for (int i = 0; i < CIRRUS_STEPS_AVG; i++) {",
+                "            intersection_pos_2 += (increment_2 * dither);\n"
+                "            messySampleDistance = messyCloudStart + increment_dist_2 * dither;\n\n"
+                "            for (int i = 0; i < CIRRUS_STEPS_AVG; i++) {\n"
+                "                if (messySampleDistance >= maxCloudDistance) break;")
+    replace_one(pack, clouds,
+                "                intersection_pos_2 += increment_2;\n            }",
+                "                intersection_pos_2 += increment_2;\n"
+                "                messySampleDistance += increment_dist_2;\n            }")
+    replace_one(pack, clouds,
+                "                float t = altitude / (max(view_vector.y, 0.05) + 0.05);",
+                "                float t = altitude / (max(view_vector.y, 0.05) + 0.05);\n"
+                "                if (t >= maxCloudDistance) continue;")
+    near = "shaders/common/water_blocks_fragment.glsl"
+    replace_one(pack, near,
+                "umbral, cloud_color, dark_cloud_color, 1.0, 1.0);",
+                "umbral, cloud_color, dark_cloud_color, 1.0, 1.0, 1.0e7);")
+
+    # Vanilla cloud meshes have a separate shader path (V_CLOUDS=0). They
+    # need an equivalent depth comparison rather than raymarch clipping.
+    vanilla = "shaders/common/clouds_blocks_fragment.glsl"
+    replace_one(pack, vanilla,
+                "uniform mat4 dhProjectionInverse;",
+                "uniform mat4 dhProjectionInverse;\n"
+                "#ifdef VOXY\n"
+                "    uniform mat4 vxProjInv;\n"
+                "    uniform sampler2D vxDepthTexOpaque;\n"
+                "#endif")
+    replace_one(pack, vanilla,
+                "        #ifdef DISTANT_HORIZONS\n"
+                "            vec2 screenCoord = gl_FragCoord.xy / vec2(viewWidth, viewHeight);",
+                "        #if defined DISTANT_HORIZONS || defined VOXY\n"
+                "            vec2 screenCoord = gl_FragCoord.xy / vec2(viewWidth, viewHeight);")
+    replace_one(pack, vanilla,
+                "            float distDH = mix(length(dhViewPos.xyz), 100000.0, step(1.0, depthDH));\n"
+                "        #else\n            float distDH = 100000.0;",
+                "            float distDH = mix(length(dhViewPos.xyz), 100000.0, step(1.0, depthDH));\n"
+                "        #elif defined VOXY\n"
+                "            float depthVoxy = texture2D(vxDepthTexOpaque, screenCoord).r;\n"
+                "            vec4 vxClipPos = vec4(screenCoord * 2.0 - 1.0, depthVoxy * 2.0 - 1.0, 1.0);\n"
+                "            vec4 vxViewPos = vxProjInv * vxClipPos;\n"
+                "            vxViewPos /= vxViewPos.w;\n"
+                "            float distDH = mix(length(vxViewPos.xyz), 100000.0, step(1.0, depthVoxy));\n"
+                "        #else\n            float distDH = 100000.0;")
+
+
 def patch(pack: dict[str, bytes]) -> None:
     from patch_clean_colorwheel import apply as apply_colorwheel
     from patch_entity_materials import apply as apply_entity_materials
@@ -39,7 +160,7 @@ def patch(pack: dict[str, bytes]) -> None:
 
     # Preserve the previous stable default: generated materials do not force
     # LabPBR on. Users may enable authored LabPBR via the original E-Lite menu.
-    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_WATER_PARITY // Match near and Voxy water absorption, depth and fog\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n"
+    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_WATER_PARITY // Match near and Voxy water absorption, depth and fog\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n#define MESSY_WATER_DEBUG 0 // [0 1 2 3 4] 0: Off, 1: Opacity, 2: Surface, 3: Reflection, 4: Render handoff\n"
 
     # Restore the last proven materials algorithm: four symmetric taps,
     # screen-footprint filtering and a distance fade. The previous release's
@@ -197,15 +318,9 @@ def patch(pack: dict[str, bytes]) -> None:
                 "        2.0 * near * far / (far + near - (2.0 * gl_FragCoord.z - 1.0) * (far - near));",
                 """        #if defined MESSY_WATER_PARITY && defined VOXY
             float water_distance = length(fragpos);
-            float messyDepth = texture2D(depthtex1, pos.xy).r;
-            vec4 messyDepthView = gbufferProjectionInverse *
-                vec4(pos.xy * 2.0 - 1.0, messyDepth * 2.0 - 1.0, 1.0);
-            float messyOpaqueDistance = length(messyDepthView.xyz / messyDepthView.w);
-            float messyVoxyDepth = texture2D(vxDepthTexOpaque, pos.xy).r;
-            vec4 messyVoxyView = vxProjInv *
-                vec4(pos.xy * 2.0 - 1.0, messyVoxyDepth * 2.0 - 1.0, 1.0);
-            float earth_distance = min(messyOpaqueDistance,
-                length(messyVoxyView.xyz / messyVoxyView.w));
+            float earth_distance = min(
+                messyWaterOpaqueDistance(pos.xy, depthtex1, gbufferProjectionInverse),
+                messyWaterOpaqueDistance(pos.xy, vxDepthTexOpaque, vxProjInv));
         #else
             float water_distance =
             2.0 * near * far / (far + near - (2.0 * gl_FragCoord.z - 1.0) * (far - near));""")
@@ -227,6 +342,39 @@ def patch(pack: dict[str, bytes]) -> None:
 float messyWaterOpacity(float thickness) {
     return clamp(1.0 - 1.0 / (max(thickness, 0.0) * WATER_ABSORPTION + 1.33),
         0.0, 1.0);
+}
+
+// Same projection/depth-to-world-distance code for vanilla and Voxy floors.
+// The all-sky sentinel must not be projected; Voxy's distant reversed-Z
+// geometry and vanilla's near geometry can each be absent in a pixel.
+float messyWaterOpaqueDistance(vec2 uv, sampler2D depthMap, mat4 projectionInv) {
+    float depth = texture2D(depthMap, uv).r;
+    if (depth >= 0.999999) return 1.0e7;
+    vec4 view = projectionInv * vec4(uv * 2.0 - 1.0,
+        depth * 2.0 - 1.0, 1.0);
+    return length(view.xyz / view.w);
+}
+
+float messyWaterDistanceFog(float cameraDistance) {
+    return smoothstep(float(MESSY_WATER_FOG_START),
+        float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
+        cameraDistance) * MESSY_WATER_FOG_STRENGTH;
+}
+
+// Use one water normal field for both renderers. Voxy and vanilla previously
+// differed in their rain attenuation and sky-visibility terms.
+vec3 messyWaterWaves(vec3 pos, float visibleSky, float rain,
+                     float time, sampler2D noiseMap) {
+    float speed = time * 0.04;
+    vec2 base = pos.xy - pos.z * 0.2;
+    vec2 wave1 = (texture2D(noiseMap,
+        base * 0.1 + vec2(speed)).rg - 0.5) * 0.66;
+    vec2 wave2 = texture2D(noiseMap,
+        base * 0.03125 - speed).rg - 0.5;
+    vec2 wave3 = (texture2D(noiseMap,
+        base * 0.125 + vec2(speed, -speed)).rg - 0.5) * 1.2;
+    return normalize(vec3(wave1 + wave2 + wave3,
+        WATER_TURBULENCE * (1.0 - rain * 0.333 * visibleSky)));
 }
 
 // E-Lite's unmodified water_shader() linearly combines an absorption-weighted
@@ -280,10 +428,8 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 "        float water_distance = 2.0 * vxNear * vxFar / (vxFar + vxNear - (2.0 * gl_FragCoord.z - 1.0) * (vxFar - vxNear));",
                 """        #ifdef MESSY_WATER_PARITY
             float water_distance = length(fragpos);
-            float messyOpaqueDepth = texture2D(vxDepthTexOpaque, pos.xy).r;
-            vec4 messyOpaqueView = vxProjInv *
-                vec4(pos.xy * 2.0 - 1.0, messyOpaqueDepth * 2.0 - 1.0, 1.0);
-            float earth_distance = length(messyOpaqueView.xyz / messyOpaqueView.w);
+            float earth_distance = messyWaterOpaqueDistance(
+                pos.xy, vxDepthTexOpaque, vxProjInv);
         #else
             float water_distance = 2.0 * vxNear * vxFar / (vxFar + vxNear - (2.0 * gl_FragCoord.z - 1.0) * (vxFar - vxNear));""")
     replace_one(pack, far_lib,
@@ -299,6 +445,24 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     replace_one(pack, far_lib,
                 "WATER_TURBULENCE - (rainStrength * 0.6 * WATER_TURBULENCE)",
                 "WATER_TURBULENCE - (rainStrength * 0.333 * WATER_TURBULENCE)")
+    for path, func, visibility in (
+        (near_lib, "normal_waves", "visible_sky"),
+        (far_lib, "normal_waves_voxy", "messyVisibleSky"),
+    ):
+        replace_one(pack, path,
+                    f"vec3 {func}(vec3 pos) {{",
+                    f"vec3 {func}(vec3 pos"
+                    + (", float messyVisibleSky" if path == far_lib else "") + ") {\n"
+                    "    #ifdef MESSY_WATER_PARITY\n"
+                    f"        return messyWaterWaves(pos, {visibility}, rainStrength,\n"
+                    "            frameTimeCounter, noisetex);\n"
+                    "    #else")
+        replace_one(pack, path,
+                    "    return normalize(final_wave);\n}",
+                    "    return normalize(final_wave);\n    #endif\n}")
+    replace_one(pack, water,
+                "normal_waves_voxy(worldposition.xzy)",
+                "normal_waves_voxy(worldposition.xzy, visibleSky)")
     replace_one(pack, far_lib,
                 "    bump *= vec3(NdotE) + vec3(0.0, 0.0, 1.0 - NdotE);",
                 "    bump *= vec3(NdotE) + vec3(0.05, 0.1, 1.0 - NdotE);")
@@ -336,6 +500,52 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 blockColor = messyWaterCompose(blockColor.rgb, messyWaterSurface,
                     messyWaterAbsorption, fresnel);
             #endif""")
+
+    # A deliberate debug override after postprocessing is much more useful
+    # than guessing at a colour correction. Modes 1-3 compare the same stage
+    # on both renderers; mode 4 identifies near/far coverage and overlap.
+    for path, color, surface, sky, water_check, color_name in (
+        (near_water, "vec3(1.0, 0.0, 0.0)",
+         "messyWaterSurface", "sky_color_reflect",
+         "block_type > 2.9 && block_type < 3.1", "block_color"),
+        (water, "vec3(0.0, 1.0, 0.0)",
+         "messyWaterSurface", "skyColorReflect",
+         "customId == ENTITY_WATER", "blockColor"),
+    ):
+        if path == near_water:
+            replace_one(pack, path, "    vec3 real_light;",
+                        "    vec3 real_light;\n"
+                        "    vec4 messyWaterDebugValue = vec4(0.0);")
+            blend = ("                block_color = messyWaterCompose(block_color.rgb, "
+                     "messyWaterSurface, messyWaterAbsorption, fresnel);")
+        else:
+            replace_one(pack, path, "    vec3 realLight;",
+                        "    vec3 realLight;\n"
+                        "    vec4 messyWaterDebugValue = vec4(0.0);")
+            blend = ("                blockColor = messyWaterCompose(blockColor.rgb, messyWaterSurface,\n"
+                     "                    messyWaterAbsorption, fresnel);")
+        replace_one(pack, path, blend,
+                    blend + "\n"
+                    "                #if MESSY_WATER_DEBUG == 1\n"
+                    "                    messyWaterDebugValue = vec4(vec3(messyWaterAbsorption), 1.0);\n"
+                    "                #elif MESSY_WATER_DEBUG == 2\n"
+                    f"                    messyWaterDebugValue = vec4({surface}, 1.0);\n"
+                    "                #elif MESSY_WATER_DEBUG == 3\n"
+                    f"                    messyWaterDebugValue = vec4({sky}, 1.0);\n"
+                    "                #elif MESSY_WATER_DEBUG == 4\n"
+                    f"                    messyWaterDebugValue = vec4({color}, 0.5);\n"
+                    "                #endif")
+        if path == near_water:
+            replace_one(pack, path, '    #include "/src/writebuffers.glsl"',
+                        "    #if defined MESSY_WATER_PARITY && defined VOXY && MESSY_WATER_DEBUG > 0\n"
+                        f"        if ({water_check}) {color_name} = messyWaterDebugValue;\n"
+                        "    #endif\n"
+                        '    #include "/src/writebuffers.glsl"')
+        else:
+            replace_one(pack, path, "    gbufferData0 = blockColor;",
+                        "    #if defined MESSY_WATER_PARITY && MESSY_WATER_DEBUG > 0\n"
+                        f"        if ({water_check}) {color_name} = messyWaterDebugValue;\n"
+                        "    #endif\n    gbufferData0 = blockColor;")
     replace_one(pack, near_lib,
                 "    return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.95, 1.0, 1.0), vec3(0.8, 1.1, 1.4) * 0.9, water_absortion), color, water_absortion);",
                 """    #ifdef MESSY_WATER_PARITY
@@ -391,18 +601,12 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
 
     unified_near = ""
     unified_far = ""
-    # E-Lite's Voxy horizon fog reaches full strength at vxRenderDistance,
-    # independently of the near-water fog. It turns distant water sky blue
-    # immediately after the LOD cutover, even if both water shaders output
-    # identical surface colors. Use a single camera-distance fog law for both
-    # final-color paths. Complementary likewise shares water material/depth
-    # handling across its GBUFFERS_WATER and VOXY_PATCH programs.
+    # Keep the camera-distance fog law identical in both water paths. Fog
+    # can contribute colour drift but the user's test with it disabled shows
+    # it is not the root cause of the geometric water seam.
     unified_near += """    #if defined FOG_ACTIVE && defined MESSY_WATER_PARITY
         float messyWaterFog = mix(fog_adj,
-            smoothstep(float(MESSY_WATER_FOG_START),
-                float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
-                gl_FogFragCoord) * MESSY_WATER_FOG_STRENGTH,
-            is_water);
+            messyWaterDistanceFog(gl_FogFragCoord), is_water);
         #define fog_adj messyWaterFog
     #endif
     #include "/src/finalcolor.glsl"
@@ -411,11 +615,9 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     #endif"""
     unified_far += """    #ifdef MESSY_WATER_PARITY
         // Override E-Lite's built-in Voxy horizon fog for water only.
-        // The previous fog was a function of LOD render distance, not
-        // camera distance, and created the visible near/far water seam.
-        float messyWaterFog = smoothstep(float(MESSY_WATER_FOG_START),
-            float(MESSY_WATER_FOG_START + MESSY_WATER_FOG_SPAN),
-            fogFragCoord) * MESSY_WATER_FOG_STRENGTH;
+        // The original fog was a function of LOD render distance, not
+        // camera distance. It can exaggerate (but does not cause) the seam.
+        float messyWaterFog = messyWaterDistanceFog(fogFragCoord);
         if (customId == ENTITY_WATER) frogAdjust = messyWaterFog;
     #endif
     #include "/src/finalcolor_voxy.glsl"
@@ -451,12 +653,12 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE POM_DEPTH POM_STEPS SS_SAMPLES")
     replace_one(pack, props, "[LabPBR] [INFO_SCREEN]",
                 "[LabPBR] [MESSY_FEATURES] [INFO_SCREEN]")
-    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH\n"
+    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_WATER_DEBUG MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH\n"
     replace_one(pack, props, "sliders = ",
                 "sliders = MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION "
                 "MESSY_AUTO_PBR_DISTANCE MESSY_VOXY_FOG_START "
                 "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH ")
-    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=Apply Automatic Materials to Entities\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
+    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Unlit Surface\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=Apply Automatic Materials to Entities\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
 
     # E-Lite's Voxy patch manifest refers to a Minecraft 1.21.9 uniform.
     replace_one(pack, "shaders/common/voxy.json", '    "endFlashIntensity",',
@@ -466,6 +668,7 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 "#if MC_VERSION >= 12104\nuniform.float.pale_garden = smooth(if(in(biome, BIOME_PALE_GARDEN), 1, 0), 60, 60)\n#else\nuniform.float.pale_garden = 0.0\n#endif")
     apply_entity_materials(pack)
     apply_colorwheel(pack)
+    patch_cloud_occlusion(pack)
 
 
 def main() -> None:
