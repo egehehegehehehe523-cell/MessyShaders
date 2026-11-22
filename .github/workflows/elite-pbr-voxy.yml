@@ -1,0 +1,22 @@
+name: Clean E-Lite PBR and Voxy fog build
+on:
+  push:
+    branches: [feature/elite-pbr-voxy-fog]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify clean E-Lite patches
+        run: python3 -m unittest discover -s tests -q
+      - name: Build clean shader ZIP
+        run: python3 tools/build_elite_materials_voxy.py
+      - name: Upload installable shader pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: MessyShaders-E-Lite-PBR-Voxy
+          path: dist/MessyShaders-E-Lite-PBR-Voxy.zip
+          if-no-files-found: error
