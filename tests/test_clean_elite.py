@@ -100,6 +100,8 @@ class CleanEliteTest(unittest.TestCase):
         self.assertNotIn(b"blockColor.a = 1.0;", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         self.assertIn(b"#define MESSY_WATER_LIGHT_HANDOFF", pack["shaders/lib/config.glsl"])
         self.assertIn(b"MESSY_WATER_LIGHT_HANDOFF MESSY_WATER_DEBUG", pack["shaders/shaders.properties"])
+        self.assertIn(b"value.MESSY_WATER_DEBUG.2=Pre-Reflection Surface (Lit)",
+                      pack["shaders/lang/en_US.lang"])
         self.assertIn(b"real_light = mix(real_light,\n                        messyWaterDistantLight(worldTime, rainStrength)",
                       pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"realLight = messyWaterDistantLight(worldTime, rainStrength);",
