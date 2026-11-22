@@ -35,33 +35,6 @@ void main() {
     messyColor.rgb *= clamp(ao, 0.0, 1.0);
 }
 """,
-    "shaders/clrwl_shadow.vsh": """#version 430 compatibility
-out vec2 messyUV;
-// Colorwheel's generated shadow material stage consumes this varying.
-// It must be emitted by the preceding vertex stage for successful linking.
-out float visible_sky;
-void main() {
-    gl_Position = ftransform();
-    messyUV = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
-    visible_sky = 1.0;
-}
-""",
-    "shaders/clrwl_shadow.fsh": """#version 430 compatibility
-uniform sampler2D gtexture;
-in vec2 messyUV;
-/* DRAWBUFFERS:0 */
-layout(location=0) out vec4 messyShadow;
-#ifdef MESSY_OFFLINE_TEST
-void clrwl_computeFragment(in vec4 src, out vec4 color,
-                           out vec2 lm, out float ao, out vec4 overlay) {
-    color=src; lm=vec2(0.96875); ao=1.0; overlay=vec4(0.0);
-}
-#endif
-void main() {
-    vec2 lm; float ao; vec4 overlay;
-    clrwl_computeFragment(texture(gtexture, messyUV), messyShadow, lm, ao, overlay);
-}
-""",
     "shaders/colorwheel.properties": """# Colorwheel's native Flywheel shader path.
 # E-Lite does not write the coefficient buffers needed for Colorwheel OIT.
 # Requesting them without the matching shaders can produce a broken-pack warning.
