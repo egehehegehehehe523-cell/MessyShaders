@@ -65,6 +65,8 @@ class CleanEliteTest(unittest.TestCase):
                       pack["shaders/lib/messy_water_composite.glsl"])
         self.assertIn(b"vec3 messyWaterWaves(vec3 pos, float visibleSky", 
                       pack["shaders/lib/messy_water_composite.glsl"])
+        self.assertIn(b"vec3 messyWaterDistantLight(int ticks, float rain)",
+                      pack["shaders/lib/messy_water_composite.glsl"])
         self.assertIn(b"float messyWaterDistanceFog(float cameraDistance)",
                       pack["shaders/lib/messy_water_composite.glsl"])
         self.assertIn(b"blend.gbuffers_water=SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA", pack["shaders/shaders.properties"])
@@ -96,6 +98,16 @@ class CleanEliteTest(unittest.TestCase):
                       pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         self.assertNotIn(b"block_color.a = 1.0;", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertNotIn(b"blockColor.a = 1.0;", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertIn(b"#define MESSY_WATER_LIGHT_HANDOFF", pack["shaders/lib/config.glsl"])
+        self.assertIn(b"MESSY_WATER_LIGHT_HANDOFF MESSY_WATER_DEBUG", pack["shaders/shaders.properties"])
+        self.assertIn(b"real_light = mix(real_light,\n                        messyWaterDistantLight(worldTime, rainStrength)",
+                      pack["shaders/common/water_blocks_fragment.glsl"])
+        self.assertIn(b"realLight = messyWaterDistantLight(worldTime, rainStrength);",
+                      pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        # The near curve must finish before the LOD handoff; far water uses the
+        # same reference with no separate per-voxel light bias.
+        self.assertIn(b"smoothstep(far * 0.5, far * 0.9,",
+                      pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"#define MESSY_WATER_DEBUG 0", pack["shaders/lib/config.glsl"])
         self.assertIn(b"MESSY_WATER_DEBUG", pack["shaders/shaders.properties"])
         self.assertIn(b"messyWaterDebugValue", pack["shaders/common/water_blocks_fragment.glsl"])
