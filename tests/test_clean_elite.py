@@ -19,6 +19,9 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/solid_voxy_blocks_fragment.glsl",
             "shaders/common/water_voxy_blocks_fragment.glsl",
             "shaders/common/water_blocks_fragment.glsl",
+            "shaders/common/deferred_fragment.glsl",
+            "shaders/common/clouds_blocks_fragment.glsl",
+            "shaders/lib/volumetric_clouds.glsl",
             "shaders/lib/water.glsl",
             "shaders/lib/water_voxy.glsl",
             "shaders/lib/messy_water_composite.glsl",
@@ -58,6 +61,12 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"water_absortion = messyWaterOpacity(water_absortion)", pack["shaders/lib/water_voxy.glsl"])
         self.assertIn(b"out float waterAlpha", pack["shaders/lib/water.glsl"])
         self.assertIn(b"float messyWaterOpacity(float thickness)", pack["shaders/lib/messy_water_composite.glsl"])
+        self.assertIn(b"float messyWaterOpaqueDistance(vec2 uv, sampler2D depthMap, mat4 projectionInv)",
+                      pack["shaders/lib/messy_water_composite.glsl"])
+        self.assertIn(b"vec3 messyWaterWaves(vec3 pos, float visibleSky", 
+                      pack["shaders/lib/messy_water_composite.glsl"])
+        self.assertIn(b"float messyWaterDistanceFog(float cameraDistance)",
+                      pack["shaders/lib/messy_water_composite.glsl"])
         self.assertIn(b"blend.gbuffers_water=SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA", pack["shaders/shaders.properties"])
         self.assertIn(b"#if defined MESSY_WATER_PARITY && defined VOXY", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"return color;", pack["shaders/lib/water_voxy.glsl"])
@@ -81,12 +90,34 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"visible_sky = clamp(gl_MultiTexCoord1.y / 240.0",
                       pack["shaders/common/shadow_vertex.glsl"])
         self.assertIn(b"#define fog_adj messyWaterFog", pack["shaders/common/water_blocks_fragment.glsl"])
-        self.assertIn(b"float messyWaterFog = smoothstep(float(MESSY_WATER_FOG_START)",
+        self.assertIn(b"float messyWaterFog = messyWaterDistanceFog(fogFragCoord)",
                       pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         self.assertIn(b'#include "/src/finalcolor_voxy.glsl"',
                       pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         self.assertNotIn(b"block_color.a = 1.0;", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertNotIn(b"blockColor.a = 1.0;", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertIn(b"#define MESSY_WATER_DEBUG 0", pack["shaders/lib/config.glsl"])
+        self.assertIn(b"MESSY_WATER_DEBUG", pack["shaders/shaders.properties"])
+        self.assertIn(b"messyWaterDebugValue", pack["shaders/common/water_blocks_fragment.glsl"])
+        self.assertIn(b"messyWaterDebugValue", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+
+    def test_voxy_clouds_obey_distant_terrain_depth(self):
+        pack = read_source(SOURCE)
+        patch(pack)
+        deferred = pack["shaders/common/deferred_fragment.glsl"].decode()
+        raymarch = pack["shaders/lib/volumetric_clouds.glsl"].decode()
+        vanilla = pack["shaders/common/clouds_blocks_fragment.glsl"].decode()
+        self.assertIn("texture2DLod(vxDepthTexOpaque,", deferred)
+        self.assertIn("vxProjInv * vec4(", deferred)
+        self.assertIn("messyCloudOcclusionDistance > messyCloudEntry", deferred)
+        self.assertIn("messyCloudOcclusionDistance);", deferred)
+        self.assertIn("if (messySampleDistance >= maxCloudDistance) break;", raymarch)
+        self.assertIn("if (t >= maxCloudDistance) continue;", raymarch)
+        self.assertIn("float density = 0.0;", raymarch)
+        self.assertIn("float density_2 = 0.0;", raymarch)
+        self.assertIn("1.0, 1.0, 1.0e7);", pack["shaders/common/water_blocks_fragment.glsl"].decode())
+        self.assertIn("float depthVoxy = texture2D(vxDepthTexOpaque, screenCoord).r;", vanilla)
+        self.assertIn("float distDH = mix(length(vxViewPos.xyz)", vanilla)
 
     def test_same_water_compositor_is_mathematically_consistent(self):
         # Verify the shared GLSL source-over decomposition for both pipelines:
