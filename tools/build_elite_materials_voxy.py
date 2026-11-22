@@ -245,6 +245,51 @@ def patch(pack: dict[str, bytes]) -> None:
     replace_one(pack, far_lib,
                 "    bump *= vec3(NdotE) + vec3(0.0, 0.0, 1.0 - NdotE);",
                 "    bump *= vec3(NdotE) + vec3(0.05, 0.1, 1.0 - NdotE);")
+    # Complementary's Medium Voxy path outputs surface RGB with an actual
+    # translucent alpha and enables blend mode 0 in voxy.json. E-Lite instead
+    # precomposed far-water refraction into an opaque RGB (alpha=1), causing
+    # a hard discontinuity where near water meets the Voxy translucent FBO.
+    # Under parity mode return the uncomposited water surface and expose the
+    # very same absorption factor as alpha. The distant fragment will then
+    # preserve the stock sky/sun reflections using an exact blend identity.
+    replace_one(pack, far_lib,
+                "vec3 refraction_voxy(vec3 fragpos, vec3 color, vec3 refraction) {",
+                "vec3 refraction_voxy(vec3 fragpos, vec3 color, vec3 refraction, out float waterAlpha) {")
+    replace_one(pack, far_lib,
+                "    return mix(texture(gaux1, pos.xy).rgb * mix(vec3(0.9, 1.0, 1.0), vec3(0.8, 1.3, 1.6) * 0.9, water_absortion), color, water_absortion);",
+                """    waterAlpha = clamp(water_absortion, 0.0, 1.0);
+    #ifdef MESSY_WATER_PARITY
+        return color;
+    #else
+        return mix(texture(gaux1, pos.xy).rgb * mix(vec3(0.9, 1.0, 1.0),
+            vec3(0.8, 1.3, 1.6) * 0.9, water_absortion), color, water_absortion);
+    #endif""")
+    replace_one(pack, water,
+                "            blockColor = vec4(refraction_voxy(fragposition, blockColor.rgb, waterNormalBase), 1.0);",
+                "            float messyWaterAbsorption;\n"
+                "            blockColor = vec4(refraction_voxy(fragposition, blockColor.rgb, "
+                "waterNormalBase, messyWaterAbsorption), 1.0);")
+    replace_one(pack, water,
+                "            blockColor.rgb = water_shader_voxy(fragposition, surfaceNormal * normalfactor, blockColor.rgb, skyColorReflect, fresnel, visibleSky, directLightColor, lmcoord);",
+                """            #ifdef MESSY_WATER_PARITY
+                vec3 messyWaterSurface = blockColor.rgb;
+            #endif
+            blockColor.rgb = water_shader_voxy(fragposition, surfaceNormal * normalfactor, blockColor.rgb, skyColorReflect, fresnel, visibleSky, directLightColor, lmcoord);
+            #ifdef MESSY_WATER_PARITY
+                // Stock E-Lite RGB = (1-f)*mix(background, surface, a)
+                //                  + f*reflection + sunlight.
+                // With GPU alpha blending, move only the surface/reflection
+                // contributions to the source and let the destination supply
+                // the actual background. This avoids refraction being mixed
+                // twice and preserves specular energy at glancing angles.
+                float messyFresnel = clamp(fresnel * REFLEX_INDEX, 0.0, 1.0);
+                float messyBlendAlpha = clamp(messyWaterAbsorption +
+                    (1.0 - messyWaterAbsorption) * messyFresnel, 0.0, 1.0);
+                blockColor.rgb = (blockColor.rgb -
+                    (1.0 - messyFresnel) * (1.0 - messyWaterAbsorption) *
+                    messyWaterSurface) / max(messyBlendAlpha, 0.001);
+                blockColor.a = messyBlendAlpha;
+            #endif""")
     replace_one(pack, near_lib,
                 "    return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.95, 1.0, 1.0), vec3(0.8, 1.1, 1.4) * 0.9, water_absortion), color, water_absortion);",
                 """    #ifdef MESSY_WATER_PARITY
@@ -259,6 +304,17 @@ def patch(pack: dict[str, bytes]) -> None:
                 '    "vxDepthTexTrans": "sampler2D"',
                 '    "vxDepthTexTrans": "sampler2D",\n'
                 '    "vxDepthTexOpaque": "sampler2D"')
+    # The Voxy JSON blending key refers to the output attachment location,
+    # not the colortex target ID (E-Lite outputs to location 0, colortex1).
+    # Match Complementary Medium's straight-alpha translucent blend mode.
+    replace_one(pack, voxy_json,
+                '  "opaqueDrawBuffers": [1, 4],',
+                '  "excludeLodsFromVanillaDepth": true,\n'
+                '  "blending": {\n'
+                '    -1: "off",\n'
+                '    0: "SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA"\n'
+                '  },\n'
+                '  "opaqueDrawBuffers": [1, 4],')
 
     # E-Lite's caustics.glsl uses visible_sky from shadow_fragment.glsl, but
     # the stock shadow vertex program never writes that varying. Keep the
