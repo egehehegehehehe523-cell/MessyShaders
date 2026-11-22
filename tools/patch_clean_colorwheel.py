@@ -59,11 +59,9 @@ void main() {
 }
 """,
     "shaders/colorwheel.properties": """# Colorwheel's native Flywheel shader path.
-oit = true
-oit.gbuffers.coefficientRanks = 3
-oit.gbuffers.colortex1 = 0
-oit.shadow.shadowcolor0 = frontmost
-oit.shadow.shadowcolor0.format = RGBA8
+# E-Lite does not write the coefficient buffers needed for Colorwheel OIT.
+# Requesting them without the matching shaders can produce a broken-pack warning.
+oit = false
 shadow.occlusion.culling = false
 """,
 }
