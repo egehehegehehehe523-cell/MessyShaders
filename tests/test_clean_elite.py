@@ -38,13 +38,21 @@ class CleanEliteTest(unittest.TestCase):
         self.assertEqual(fragment.count("computeRealLight(messyOmniLight,"), 3)
         self.assertIn(b"screen.MESSY_FEATURES", pack["shaders/shaders.properties"])
         self.assertIn(b"vxDepthTexOpaque", pack["shaders/lib/water_voxy.glsl"])
+        self.assertIn(b"bump *= vec3(NdotE) + vec3(0.05, 0.1, 1.0 - NdotE)",
+                      pack["shaders/lib/water_voxy.glsl"])
+        self.assertIn(b"rainStrength * 0.333 * WATER_TURBULENCE",
+                      pack["shaders/lib/water_voxy.glsl"])
         self.assertIn(b"vxDepthTexOpaque", pack["shaders/lib/water.glsl"])
         self.assertIn(b"vxProjInv", pack["shaders/lib/water_voxy.glsl"])
         self.assertIn(b'"vxDepthTexOpaque": "sampler2D"',
                       pack["shaders/common/voxy.json"])
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
-        self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_blocks_fragment.glsl"])
-        self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertIn(b"MESSY_WATER_PARITY", pack["shaders/common/water_blocks_fragment.glsl"])
+        self.assertIn(b"MESSY_WATER_PARITY", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        self.assertNotIn(b"MESSY_UNIFIED_WATER", pack["shaders/lib/config.glsl"])
+        self.assertNotIn(b"MESSY_UNIFIED_WATER", pack["shaders/shaders.properties"])
+        self.assertNotIn(b"MESSY_UNIFIED_WATER", pack["shaders/lang/en_US.lang"])
+        self.assertNotIn(b"MESSY_UNIFIED_WATER_DARKNESS", pack["shaders/common/water_blocks_fragment.glsl"])
         shadow_vertex = pack["shaders/clrwl_shadow.vsh"].decode()
         shadow_fragment = pack["shaders/clrwl_shadow.fsh"].decode()
         self.assertIn("SHADOW_DIST * messyShadowFalloff", shadow_vertex)
