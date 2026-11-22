@@ -21,7 +21,6 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/water_blocks_fragment.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
-            "shaders/clrwl_shadow.vsh", "shaders/clrwl_shadow.fsh",
             "shaders/colorwheel.properties",
         })
         self.assertNotIn("messyRgb", b"".join(pack.values()).decode("utf-8", "ignore"))
@@ -39,9 +38,13 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_UNIFIED_WATER", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
-        shadow_vertex = pack["shaders/clrwl_shadow.vsh"].decode()
-        self.assertIn("out float visible_sky;", shadow_vertex)
-        self.assertIn("visible_sky = 1.0;", shadow_vertex)
+        # Colorwheel's shadow program is optional. The old program failed
+        # linkage on its generated material stage's visible_sky varying.
+        self.assertNotIn("shaders/clrwl_shadow.vsh", pack)
+        self.assertNotIn("shaders/clrwl_shadow.fsh", pack)
+        self.assertIn(b"#define fog_adj messyWaterFog", pack["shaders/common/water_blocks_fragment.glsl"])
+        self.assertIn(b"frogAdjust = smoothstep(float(MESSY_WATER_FOG_START)",
+                      pack["shaders/common/water_voxy_blocks_fragment.glsl"])
 
 
 if __name__ == "__main__":
