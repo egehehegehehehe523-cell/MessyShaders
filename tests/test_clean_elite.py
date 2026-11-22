@@ -1,0 +1,32 @@
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from build_elite_materials_voxy import patch
+from build_fast_rgb import SOURCE, read_source
+
+
+class CleanEliteTest(unittest.TestCase):
+    def test_clean_base_with_materials_and_voxy_fog(self):
+        base = read_source(SOURCE)
+        pack = dict(base)
+        patch(pack)
+        changed = {path for path, data in pack.items() if data != base[path]}
+        self.assertEqual(changed, {
+            "shaders/lib/config.glsl", "shaders/shaders.properties",
+            "shaders/lang/en_US.lang", "shaders/common/solid_blocks_fragment.glsl",
+            "shaders/common/solid_voxy_blocks_fragment.glsl",
+            "shaders/common/water_voxy_blocks_fragment.glsl",
+            "shaders/common/voxy.json",
+        })
+        self.assertNotIn("messyRgb", b"".join(pack.values()).decode("utf-8", "ignore"))
+        for path in ("shaders/common/solid_voxy_blocks_fragment.glsl",
+                     "shaders/common/water_voxy_blocks_fragment.glsl"):
+            self.assertIn(b"MESSY_VOXY_FOG_START", pack[path])
+            self.assertIn(b"MESSY_VOXY_FOG_SPAN", pack[path])
+        self.assertIn(b"MESSY_AUTO_PBR", pack["shaders/common/solid_blocks_fragment.glsl"])
+
+
+if __name__ == "__main__":
+    unittest.main()
