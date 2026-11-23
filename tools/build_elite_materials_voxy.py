@@ -221,7 +221,13 @@ def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
     replace_one(pack, fsh,
                 "    uniform sampler2D vxDepthTexOpaque;",
                 "    uniform sampler2D vxDepthTexOpaque;\n"
-                "    uniform mat4 vxProj;\n    uniform mat4 vxModelView;")
+                "    uniform mat4 vxProj;\n    uniform mat4 vxModelView;\n"
+                "    uniform mat4 vxModelViewInv;")
+    replace_one(pack, fsh,
+                "#if V_CLOUDS > 0 && !defined UNKNOWN_DIM || AURORA > 0\n"
+                "    uniform sampler2D noisetex;\n    uniform vec3 cameraPosition;",
+                "#if V_CLOUDS > 0 && !defined UNKNOWN_DIM || AURORA > 0 || defined VOXY\n"
+                "    uniform sampler2D noisetex;\n    uniform vec3 cameraPosition;")
     replace_one(pack, fsh,
                 "#if (V_CLOUDS > 0 && !defined UNKNOWN_DIM || AURORA > 0) || ROUND_SUN < 2",
                 "#if (V_CLOUDS > 0 && !defined UNKNOWN_DIM || AURORA > 0) || ROUND_SUN < 2 || defined VOXY")
@@ -239,19 +245,45 @@ def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
         vec2 messyPixelUv = texcoord * RENDER_SCALE;
         float messyDepth = texture2DLod(vxDepthTexOpaque, messyPixelUv, 0).r;
         if (d >= 0.9999 && messyDepth < 0.999999 &&
-            d3 >= messyDepth - 0.0000001 && MESSY_VOXY_SHADOW_STRENGTH > 0.0) {
+            d3 >= messyDepth && MESSY_VOXY_SHADOW_STRENGTH > 0.0) {
             vec3 messySunWorld = normalize(mat3(gbufferModelViewInverse) * sunPosition);
             if (messySunWorld.y > 0.08) {
                 vec3 messyLight = normalize(mat3(vxModelView) * messySunWorld);
                 vec4 messyPoint = vxProjInv * vec4(messyPixelUv * 2.0 - 1.0,
                     messyDepth * 2.0 - 1.0, 1.0);
                 vec3 messyBase = messyPoint.xyz / messyPoint.w;
+                // Keep the Voxy water floor entirely out of cast shadows.
+                // The translucent depth buffer can quantize to the same
+                // value as the opaque bottom at very long LOD distances.
+                // In the Overworld, submerged solids are below sea level;
+                // do not darken them through transparent ocean water.
+                float messyWorldY = (vxModelViewInv * vec4(messyBase, 1.0)).y
+                    + cameraPosition.y;
+                // Thin foliage, voxel silhouettes and depth holes have
+                // unstable neighbor depth. They are not reliable receivers.
+                vec2 messyTexelSize = 1.0 / vec2(viewWidth, viewHeight);
+                float messyDepthRight = texture2DLod(vxDepthTexOpaque,
+                    messyPixelUv + vec2(messyTexelSize.x, 0.0), 0).r;
+                float messyDepthUp = texture2DLod(vxDepthTexOpaque,
+                    messyPixelUv + vec2(0.0, messyTexelSize.y), 0).r;
+                vec4 messyRight = vxProjInv * vec4((messyPixelUv +
+                    vec2(messyTexelSize.x, 0.0)) * 2.0 - 1.0,
+                    messyDepthRight * 2.0 - 1.0, 1.0);
+                vec4 messyUp = vxProjInv * vec4((messyPixelUv +
+                    vec2(0.0, messyTexelSize.y)) * 2.0 - 1.0,
+                    messyDepthUp * 2.0 - 1.0, 1.0);
+                float messyReceiverStability = 1.0 - smoothstep(2.0, 8.0,
+                    max(abs(messyRight.z / messyRight.w - messyBase.z),
+                        abs(messyUp.z / messyUp.w - messyBase.z)));
+                if (messyDepthRight >= 0.999999 || messyDepthUp >= 0.999999)
+                    messyReceiverStability = 0.0;
                 float messyDither = fract(dot(gl_FragCoord.xy,
                     vec2(0.06711056, 0.00583715)));
                 float messyShade = 1.0;
+                if (messyWorldY > 65.5 && messyReceiverStability > 0.01)
                 for (int messyI = 0; messyI < MESSY_VOXY_SHADOW_STEPS; ++messyI) {
                     vec3 messyProbe = messyBase + messyLight *
-                        (2.5 + (float(messyI) + messyDither) * 4.0);
+                        (5.0 + (float(messyI) + messyDither) * 4.0);
                     vec4 messyClip = vxProj * vec4(messyProbe, 1.0);
                     if (messyClip.w <= 0.0) break;
                     vec2 messySampleUv = messyClip.xy / messyClip.w * 0.5 + 0.5;
@@ -263,14 +295,34 @@ def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
                         vec4 messyHit = vxProjInv * vec4(messySampleUv * 2.0 - 1.0,
                             messySampleDepth * 2.0 - 1.0, 1.0);
                         float messyOcclusion = messyHit.z / messyHit.w - messyProbe.z;
-                        if (messyOcclusion > 1.5 && messyOcclusion < 24.0) {
-                            messyShade = 0.0;
-                            break;
+                        if (messyOcclusion > 3.0 && messyOcclusion < 18.0) {
+                            // Reject single-pixel foliage silhouettes as
+                            // occluders; genuine LOD terrain has continuity.
+                            float messyNeighborDepth = texture2DLod(
+                                vxDepthTexOpaque, messySampleUv +
+                                vec2(messyTexelSize.x, 0.0), 0).r;
+                            vec4 messyNeighborHit = vxProjInv * vec4(
+                                (messySampleUv + vec2(messyTexelSize.x, 0.0))
+                                    * 2.0 - 1.0,
+                                messyNeighborDepth * 2.0 - 1.0, 1.0);
+                            if (messyNeighborDepth < 0.999999 &&
+                                abs(messyNeighborHit.z / messyNeighborHit.w -
+                                    messyHit.z / messyHit.w) < 5.0) {
+                                messyShade = 1.0 - smoothstep(3.0, 7.0,
+                                    messyOcclusion) *
+                                    (1.0 - smoothstep(11.0, 18.0,
+                                        messyOcclusion));
+                                break;
+                            }
                         }
                     }
                 }
-                block_color.rgb *= mix(1.0 - MESSY_VOXY_SHADOW_STRENGTH,
-                    1.0, messyShade);
+                // Screen-space shadows are a secondary contact cue, never
+                // allowed to black out existing E-Lite ambient illumination.
+                float messySoftShadow =
+                    (1.0 - messyShade) * messyReceiverStability;
+                block_color.rgb *= 1.0 - 0.55 *
+                    MESSY_VOXY_SHADOW_STRENGTH * messySoftShadow;
             }
         }
     #endif""")
@@ -528,6 +580,15 @@ float messyWaterDistanceFog(float cameraDistance) {
         cameraDistance) * MESSY_WATER_FOG_STRENGTH;
 }
 
+// Both water renderers must agree at night. The previous change only
+// normalized Voxy's fog tint; its daytime-based fog-influence factor
+// remained independent of the vanilla water pass.
+float messyWaterNightFogWeight(int ticks) {
+    float moment = mod(float(ticks), 24000.0);
+    return smoothstep(12100.0, 14200.0, moment) *
+        (1.0 - smoothstep(22000.0, 23900.0, moment));
+}
+
 // Vanilla water calculates illumination in light_vertex.glsl; Voxy does it
 // later from its LOD voxel light map with different sky/daylight constants.
 // The diagnostic isolated this as the last visible chunk-shaped difference.
@@ -594,6 +655,23 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     replace_one(pack, near_water,
                 '#include "/lib/water.glsl"',
                 '#include "/lib/messy_water_composite.glsl"\n#include "/lib/water.glsl"')
+    # Mark only the actual near-water include. All other shader passes keep
+    # their original E-Lite daytime/nighttime fog law unchanged.
+    replace_one(pack, near_water,
+                '    #include "/src/finalcolor.glsl"',
+                '    #define MESSY_WATER_FINALCOLOR\n'
+                '    #include "/src/finalcolor.glsl"\n'
+                '    #undef MESSY_WATER_FINALCOLOR')
+    near_finalcolor = "shaders/src/finalcolor.glsl"
+    replace_one(pack, near_finalcolor,
+                '        vec3 fogColorMod = dayBlend(saturate(vec3(0.2392, 0.4039, 0.5922), dayBF(dayBF(1.0, 1.0, 5.0), 1.0, dayBF(5.0, 1.0, 1.0))), vec3(0.3, 0.45, 0.615), vec3(0.1647, 0.3725, 0.6157));',
+                '''        vec3 fogColorMod = dayBlend(saturate(vec3(0.2392, 0.4039, 0.5922), dayBF(dayBF(1.0, 1.0, 5.0), 1.0, dayBF(5.0, 1.0, 1.0))), vec3(0.3, 0.45, 0.615), vec3(0.1647, 0.3725, 0.6157));
+        #if defined MESSY_WATER_FINALCOLOR && defined MESSY_WATER_PARITY && defined VOXY
+            float messyNightFog = messyWaterNightFogWeight(worldTime);
+            fogColorMod = mix(fogColorMod,
+                vec3(0.1647, 0.3725, 0.6157), messyNightFog);
+            fogInfluence = mix(fogInfluence, 1.0, messyNightFog);
+        #endif''')
     replace_one(pack, water,
                 '#include "/lib/water_voxy.glsl"',
                 '#include "/lib/messy_water_composite.glsl"\n#include "/lib/water_voxy.glsl"')
@@ -692,12 +770,10 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
             #if WATER_COLOR_SOURCE == 0
                 blockColor.rgb = waterTexture * realLight * WATER_COLOR;""")
 
-    # E-Lite's Voxy finalcolor originally hardcodes a bright daytime fog
-    # multiplier, even at midnight, while vanilla water smoothly changes from
-    # sunset to much darker night fog. At the 0.85-strength distance fog this
-    # produces a very visible dark near-water rectangle at night despite
-    # equalized water surface lighting and opacity. Match the fog *colour* law
-    # on the water path only; leave terrain and the user's day-water parity.
+    # Keep original E-Lite/accepted daytime Voxy fog EXACTLY. The v18 attempt
+    # changed this tint throughout the daytime via dayBlendVoxy, breaking the
+    # previously approved daytime transition. Only at night do both water
+    # passes converge on the same tint and fog-influence term.
     far_finalcolor = "shaders/src/finalcolor_voxy.glsl"
     replace_one(pack, far_finalcolor,
                 "        #if FOG_TINT == 0\n"
@@ -710,18 +786,17 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 """        vec3 messyFogBase = vec3(0.592, 0.888, 1.233);
         #ifdef MESSY_WATER_PARITY
             if (customId == ENTITY_WATER) {
-                // Same sunset/day/night fog palette as finalcolor.glsl.
-                // Keep Voxy's own day interpolation only for its sky state.
-                float messyFogSunsetSaturation = dayBlendFloatVoxyN(
-                    dayBlendFloatVoxyN(1.0, 1.0, 5.0, dayMixerV, nightMixerV, dayMomentV),
-                    1.0,
-                    dayBlendFloatVoxyN(5.0, 1.0, 1.0, dayMixerV, nightMixerV, dayMomentV),
-                    dayMixerV, nightMixerV, dayMomentV);
-                messyFogBase = dayBlendVoxy(
-                    saturate(vec3(0.2392, 0.4039, 0.5922), messyFogSunsetSaturation),
-                    vec3(0.3, 0.45, 0.615),
-                    vec3(0.1647, 0.3725, 0.6157),
-                    dayMixerV, nightMixerV, dayMomentV);
+                // When the night blend is zero, the precise original E-Lite
+                // far-water fog is preserved, with no change to day parity.
+                // finalcolor_voxy.glsl also runs in opaque Voxy programs,
+                // which do not include the water-only shared helper.
+                float messyNightMoment = mod(float(worldTime), 24000.0);
+                float messyNightFog =
+                    smoothstep(12100.0, 14200.0, messyNightMoment) *
+                    (1.0 - smoothstep(22000.0, 23900.0, messyNightMoment));
+                messyFogBase = mix(messyFogBase,
+                    vec3(0.1647, 0.3725, 0.6157), messyNightFog);
+                fogInfluence = mix(fogInfluence, 1.0, messyNightFog);
             }
         #endif
         #if FOG_TINT == 0
