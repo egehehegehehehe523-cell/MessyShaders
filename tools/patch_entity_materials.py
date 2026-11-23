@@ -13,7 +13,11 @@ def apply(pack: dict[str, bytes]) -> None:
     if body.count(anchor) != 1:
         raise ValueError("Missing entity-normal insertion anchor")
     code = r"""
-    #if defined MESSY_PBR_ENTITIES && defined GBUFFER_ENTITIES && MATERIAL_GLOSS > 0
+    // Iris recognizes Boolean shader options only when they are referenced
+    // by #ifdef/#ifndef, not by "#if defined(...)" alone. Keep this guard
+    // explicit so the opt-in setting appears in the shaders menu.
+    #ifdef MESSY_PBR_ENTITIES
+    #if defined GBUFFER_ENTITIES && MATERIAL_GLOSS > 0
         // Only entities, never block geometry or dropped item render wrappers.
         // Skip atlas texel boundaries and degenerate UV mapping.
         vec2 entTexel = 1.0 / max(vec2(atlasSize), vec2(16.0));
@@ -48,6 +52,7 @@ def apply(pack: dict[str, bytes]) -> None:
             bumpedNormal = normalize(entTBN * entNormal);
         }
     #endif
+    #endif
 
 """
     body = body.replace(anchor, code + anchor, 1)
@@ -57,12 +62,14 @@ def apply(pack: dict[str, bytes]) -> None:
     if body.count(anchor2) != 1:
         raise ValueError("Missing entity direct-light anchor")
     code2 = r"""
-    #if defined MESSY_PBR_ENTITIES && defined GBUFFER_ENTITIES && MATERIAL_GLOSS > 0
+    #ifdef MESSY_PBR_ENTITIES
+    #if defined GBUFFER_ENTITIES && MATERIAL_GLOSS > 0
         vec3 entSun = normalize(light_mix >= 0.5 ? sunPosition : -sunPosition);
         float entFaceLight = max(dot(normalize(flat_normal), entSun), 0.0);
         float entPixelLight = max(dot(normalize(bumpedNormal), entSun), 0.0);
         shadow_c_relief *= mix(1.0, clamp((entPixelLight + 0.20) /
             (entFaceLight + 0.20), 0.70, 1.30), smoothstep(0.58, 0.78, light_mix) * 0.8);
+    #endif
     #endif
 
 """
