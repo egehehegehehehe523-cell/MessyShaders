@@ -27,6 +27,7 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/lib/water_voxy.glsl",
             "shaders/lib/messy_water_composite.glsl",
             "shaders/src/finalcolor_voxy.glsl",
+            "shaders/src/finalcolor.glsl",
             "shaders/common/shadow_vertex.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
@@ -141,7 +142,7 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"messyWaterDebugValue", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         fog = pack["shaders/src/finalcolor_voxy.glsl"].decode()
         self.assertIn("if (customId == ENTITY_WATER)", fog)
-        self.assertIn("dayBlendVoxy(", fog)
+        self.assertIn("messyNightMoment = mod(float(worldTime), 24000.0)", fog)
         self.assertIn("vec3(0.1647, 0.3725, 0.6157)", fog)
         self.assertIn("saturate(messyFogBase, 0.5)", fog)
         self.assertIn("saturate(messyFogBase, 1.0)", fog)
@@ -153,6 +154,9 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn("messySampleDepth = texture2DLod(vxDepthTexOpaque", deferred)
         self.assertIn("for (int messyI = 0; messyI < MESSY_VOXY_SHADOW_STEPS", deferred)
         self.assertIn("d3 >= messyDepth", deferred)
+        self.assertIn("messyReceiverStability", deferred)
+        self.assertIn("messyNeighborDepth < 0.999999", deferred)
+        self.assertIn("block_color.rgb *= 1.0 - 0.55 *", deferred)
         self.assertIn(b"MESSY_VOXY_SHADOW_STEPS [MESSY_WATER_SCREEN]", pack["shaders/shaders.properties"])
         for world in ("world0", "world-1", "world1", ""):
             root = f"shaders/{world}/" if world else "shaders/"
@@ -171,6 +175,19 @@ class CleanEliteTest(unittest.TestCase):
         night_palette = "vec3(0.1647, 0.3725, 0.6157)"
         self.assertIn(night_palette, near)
         self.assertIn(night_palette, far)
+        self.assertIn("messyWaterNightFogWeight(worldTime)", near)
+        self.assertIn("messyNightMoment = mod(float(worldTime), 24000.0)", far)
+        self.assertIn("fogInfluence = mix(fogInfluence, 1.0, messyNightFog);", near)
+        self.assertIn("fogInfluence = mix(fogInfluence, 1.0, messyNightFog);", far)
+        shared = pack["shaders/lib/messy_water_composite.glsl"].decode()
+        self.assertIn("float messyWaterNightFogWeight(int ticks)", shared)
+        self.assertIn("#define MESSY_WATER_FINALCOLOR", pack["shaders/common/water_blocks_fragment.glsl"].decode())
+        # Preserve the exact pre-v18 E-Lite far-water fog tint during daylight.
+        self.assertIn("vec3 messyFogBase = vec3(0.592, 0.888, 1.233);", far)
+        self.assertNotIn("messyFogBase = dayBlendVoxy(", far)
+        self.assertIn("#ifdef MESSY_WATER_PARITY", far)
+        # Daytime phase 6000 is below the night transition start 12100.
+        self.assertIn("smoothstep(12100.0, 14200.0, moment)", shared)
         # Outside the water branch, Voxy's historical terrain tint remains.
         self.assertIn("vec3 messyFogBase = vec3(0.592, 0.888, 1.233);", far)
 
