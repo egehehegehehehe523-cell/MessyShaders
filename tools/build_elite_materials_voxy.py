@@ -585,8 +585,8 @@ float messyWaterDistanceFog(float cameraDistance) {
 // remained independent of the vanilla water pass.
 float messyWaterNightFogWeight(int ticks) {
     float moment = mod(float(ticks), 24000.0);
-    return smoothstep(12100.0, 14200.0, moment) *
-        (1.0 - smoothstep(22000.0, 23900.0, moment));
+    return smoothstep(11500.0, 13000.0, moment) *
+        (1.0 - smoothstep(22500.0, 23900.0, moment));
 }
 
 // Vanilla water calculates illumination in light_vertex.glsl; Voxy does it
@@ -792,8 +792,8 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 // which do not include the water-only shared helper.
                 float messyNightMoment = mod(float(worldTime), 24000.0);
                 float messyNightFog =
-                    smoothstep(12100.0, 14200.0, messyNightMoment) *
-                    (1.0 - smoothstep(22000.0, 23900.0, messyNightMoment));
+                    smoothstep(11500.0, 13000.0, messyNightMoment) *
+                    (1.0 - smoothstep(22500.0, 23900.0, messyNightMoment));
                 messyFogBase = mix(messyFogBase,
                     vec3(0.1647, 0.3725, 0.6157), messyNightFog);
                 fogInfluence = mix(fogInfluence, 1.0, messyNightFog);
