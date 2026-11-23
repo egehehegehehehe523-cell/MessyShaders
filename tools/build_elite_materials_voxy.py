@@ -29,6 +29,64 @@ def replace_one(pack: dict[str, bytes], path: str, old: str, new: str) -> None:
     pack[path] = src.replace(old, new, 1).encode("utf-8")
 
 
+def patch_custom_sky_and_moon_glint(pack: dict[str, bytes]) -> None:
+    """Hide custom sky layers and repair high-quality moon glints on water.
+
+    Only the sun/moon highlight changes in the two water implementations;
+    neither the shared water compositor nor the Voxy handoff is touched.
+    """
+    sky = "shaders/common/skytextured_fragment.glsl"
+    replace_one(pack, sky, "uniform sampler2D tex;",
+                "uniform sampler2D tex;\n#ifdef IS_IRIS\n    uniform int renderStage;\n#endif")
+    replace_one(pack, sky,
+                "void main() {\n    //if(fragment_cull()) discard;",
+                """void main() {
+    #if defined IS_IRIS && defined MC_RENDER_STAGE_CUSTOM_SKY
+        #ifdef MESSY_HIDE_CUSTOM_SKY
+            // FabricSkyBoxes/OptiFine sky layers are a distinct Iris stage;
+            // the vanilla sun, moon and stars are left intact.
+            if (renderStage == MC_RENDER_STAGE_CUSTOM_SKY) discard;
+        #endif
+    #endif
+    //if(fragment_cull()) discard;""")
+
+    for water, model_view in (
+        ("shaders/lib/water.glsl", "gbufferModelViewInverse"),
+        ("shaders/lib/water_voxy.glsl", "vxModelViewInv"),
+    ):
+        replace_one(pack, water,
+                    "#if SUN_REFLECTION > 0\n    #if !defined NETHER && !defined THE_END",
+                    "#if SUN_REFLECTION > 0 || MESSY_MOON_REFLECTION > 0\n"
+                    "    #if !defined NETHER && !defined THE_END")
+        replace_one(pack, water,
+                    f"vec3 sunDir = normalize(mat3({model_view}) * sunPosition);",
+                    f"vec3 sunDir = normalize(mat3({model_view}) * astro_pos);")
+        replace_one(pack, water,
+                    "            return clamp(\n"
+                    "                (reflection - 0.165) *\n"
+                    "                clamp(lmcoord.y, 0.0, 1.0) *\n"
+                    "                (1.0 - rainStrength) * dayBF(10.0, 10.0, 5.0), 0.0, 100.0);",
+                    """            // A separate moon setting controls night glints. With daytime
+            // sun reflections disabled, moonlight must not revive them.
+            float messyAstroStrength = worldTime > 13200
+                ? float(MESSY_MOON_REFLECTION) * 0.5 : 1.0;
+            #if SUN_REFLECTION == 0
+                if (worldTime <= 13200) messyAstroStrength = 0.0;
+            #endif
+            return clamp(
+                (reflection - 0.165) *
+                clamp(lmcoord.y, 0.0, 1.0) *
+                (1.0 - rainStrength) * dayBF(10.0, 10.0, 5.0), 0.0, 100.0)
+                * messyAstroStrength;""")
+        replace_one(pack, water,
+                    "    #if SUN_REFLECTION > 0\n        #ifndef NETHER\n"
+                    "            #ifndef THE_END\n"
+                    "                return mix(color, reflection.rgb, fresnel * REFLEX_INDEX) +",
+                    "    #if SUN_REFLECTION > 0 || MESSY_MOON_REFLECTION > 0\n"
+                    "        #ifndef NETHER\n            #ifndef THE_END\n"
+                    "                return mix(color, reflection.rgb, fresnel * REFLEX_INDEX) +")
+
+
 def patch_cloud_occlusion(pack: dict[str, bytes]) -> None:
     """Depth-limit clouds against Voxy's opaque LOD surface.
 
@@ -161,6 +219,9 @@ def patch(pack: dict[str, bytes]) -> None:
     # Preserve the previous stable default: generated materials do not force
     # LabPBR on. Users may enable authored LabPBR via the original E-Lite menu.
     pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_WATER_PARITY // Match near and Voxy water absorption, depth and fog\n#define MESSY_WATER_LIGHT_HANDOFF // Blend vanilla water into the same distant lighting used by Voxy\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n#define MESSY_WATER_DEBUG 0 // [0 1 2 3 4] 0: Off, 1: Opacity, 2: Surface, 3: Reflection, 4: Render handoff\n"
+
+    pack[config] += (b"#define MESSY_HIDE_CUSTOM_SKY // Hide custom resource-pack sky layers\n"
+                     b"#define MESSY_MOON_REFLECTION 1 // [0 1 2] Off, subtle, bright moonlight glint\n")
 
     # Restore the last proven materials algorithm: four symmetric taps,
     # screen-footprint filtering and a distance fade. The previous release's
@@ -721,6 +782,20 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH ")
     pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_LIGHT_HANDOFF=Match Distant Water Lighting\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Pre-Reflection Surface (Lit)\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=IntegratedPBR on Entities\noption.MESSY_PBR_ENTITIES.comment=Apply automatic texture-detail normals to mobs and other entities. Off by default; may increase GPU cost.\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
 
+    replace_one(pack, props,
+                "screen.SKY_SCREEN = COLOR_SCHEME [CUSTOM_COLORS_SCREEN] <empty> <empty> SIMPLE_SKY BIOME_SKY BIOME_FOG SANDSTORM <empty> <empty> STAR_SLIDER END_STARS STARS_BRIGHTNESS STARS_COVERAGE AURORA CUSTOM_SKYFIX",
+                "screen.SKY_SCREEN = COLOR_SCHEME [CUSTOM_COLORS_SCREEN] <empty> <empty> SIMPLE_SKY BIOME_SKY BIOME_FOG SANDSTORM <empty> <empty> STAR_SLIDER END_STARS STARS_BRIGHTNESS STARS_COVERAGE AURORA CUSTOM_SKYFIX MESSY_HIDE_CUSTOM_SKY")
+    replace_one(pack, props,
+                "screen.MESSY_WATER_SCREEN= MESSY_WATER_LIGHT_HANDOFF",
+                "screen.MESSY_WATER_SCREEN= MESSY_MOON_REFLECTION MESSY_WATER_LIGHT_HANDOFF")
+    pack[lang] += (b"option.MESSY_HIDE_CUSTOM_SKY=Hide Custom Skybox Overlays\n"
+                   b"option.MESSY_HIDE_CUSTOM_SKY.comment=Suppress resource-pack sky layers but keep the regular sun, moon and stars. Requires Iris custom-sky stages.\n"
+                   b"option.MESSY_MOON_REFLECTION=Moon Reflection on Water\n"
+                   b"option.MESSY_MOON_REFLECTION.comment=Independent night-time moon glint strength for nearby and Voxy water.\n"
+                   b"value.MESSY_MOON_REFLECTION.0=Off\n"
+                   b"value.MESSY_MOON_REFLECTION.1=Subtle\n"
+                   b"value.MESSY_MOON_REFLECTION.2=Bright\n")
+
     # E-Lite's Voxy patch manifest refers to a Minecraft 1.21.9 uniform.
     replace_one(pack, "shaders/common/voxy.json", '    "endFlashIntensity",',
                 '    #if MC_VERSION >= 12109\n    "endFlashIntensity",\n    #endif')
@@ -730,6 +805,7 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     apply_entity_materials(pack)
     apply_colorwheel(pack)
     patch_cloud_occlusion(pack)
+    patch_custom_sky_and_moon_glint(pack)
 
 
 def main() -> None:
