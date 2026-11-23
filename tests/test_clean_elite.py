@@ -186,8 +186,8 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn("vec3 messyFogBase = vec3(0.592, 0.888, 1.233);", far)
         self.assertNotIn("messyFogBase = dayBlendVoxy(", far)
         self.assertIn("#ifdef MESSY_WATER_PARITY", far)
-        # Daytime phase 6000 is below the night transition start 12100.
-        self.assertIn("smoothstep(12100.0, 14200.0, moment)", shared)
+        # Daytime phase 6000 has weight 0; by 13000 it reaches 1.
+        self.assertIn("smoothstep(11500.0, 13000.0, moment)", shared)
         # Outside the water branch, Voxy's historical terrain tint remains.
         self.assertIn("vec3 messyFogBase = vec3(0.592, 0.888, 1.233);", far)
 
