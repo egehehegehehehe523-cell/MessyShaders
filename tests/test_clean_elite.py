@@ -73,6 +73,21 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"#if defined MESSY_WATER_PARITY && defined VOXY", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"return color;", pack["shaders/lib/water_voxy.glsl"])
         self.assertIn(b"MESSY_PBR_ENTITIES", pack["shaders/common/solid_blocks_fragment.glsl"])
+        # Iris intentionally ignores #if defined(...) when determining
+        # whether to expose a Boolean shader option. Guard with #ifdef.
+        self.assertIn(b"//#define MESSY_PBR_ENTITIES", pack["shaders/lib/config.glsl"])
+        self.assertEqual(fragment.count("#ifdef MESSY_PBR_ENTITIES"), 2)
+        self.assertNotIn("#if defined MESSY_PBR_ENTITIES", fragment)
+        props = pack["shaders/shaders.properties"]
+        self.assertIn(b"screen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES", props)
+        self.assertIn(b"screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE MESSY_PBR_ENTITIES", props)
+        self.assertIn(b"option.MESSY_PBR_ENTITIES=IntegratedPBR on Entities", pack["shaders/lang/en_US.lang"])
+        # Emissive ores/materials are a separate E-Lite feature and must not
+        # be accidentally reset while making the entity toggle discoverable.
+        config = pack["shaders/lib/config.glsl"]
+        self.assertIn(b"#define EMISSIVE_ORE", config)
+        self.assertIn(b"#define EMISSIVE_MATERIAL", config)
+        self.assertIn(b"//#define LabEMISSIVE", config)
         self.assertIn(b"MESSY_WATER_PARITY", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"MESSY_WATER_PARITY", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         self.assertNotIn(b"MESSY_UNIFIED_WATER", pack["shaders/lib/config.glsl"])
