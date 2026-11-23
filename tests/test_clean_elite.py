@@ -26,6 +26,7 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/lib/water.glsl",
             "shaders/lib/water_voxy.glsl",
             "shaders/lib/messy_water_composite.glsl",
+            "shaders/src/finalcolor_voxy.glsl",
             "shaders/common/shadow_vertex.glsl",
             "shaders/common/voxy.json",
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
@@ -130,6 +131,31 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"MESSY_WATER_DEBUG", pack["shaders/shaders.properties"])
         self.assertIn(b"messyWaterDebugValue", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertIn(b"messyWaterDebugValue", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
+        fog = pack["shaders/src/finalcolor_voxy.glsl"].decode()
+        self.assertIn("if (customId == ENTITY_WATER)", fog)
+        self.assertIn("dayBlendVoxy(", fog)
+        self.assertIn("vec3(0.1647, 0.3725, 0.6157)", fog)
+        self.assertIn("saturate(messyFogBase, 0.5)", fog)
+        self.assertIn("saturate(messyFogBase, 1.0)", fog)
+        self.assertIn("saturate(messyFogBase, -0.5)", fog)
+        self.assertIn("MESSY_VOXY_SHADOW_CONTRAST", pack["shaders/lib/config.glsl"].decode())
+        solid = pack["shaders/common/solid_voxy_blocks_fragment.glsl"].decode()
+        self.assertIn("omniLight *= mix(1.0, 0.52, messyVoxyShadow);", solid)
+        self.assertIn("directLightStrength *= mix(1.0, 0.70, messyVoxyShadow);", solid)
+        self.assertIn("customId != ENTITY_EMMISIVE", solid)
+        self.assertNotIn("MESSY_VOXY_SHADOW_CONTRAST > 0\n", solid)
+        self.assertIn(b"MESSY_VOXY_SHADOW_CONTRAST [MESSY_WATER_SCREEN]", pack["shaders/shaders.properties"])
+
+    def test_night_water_fog_uses_same_palette_in_both_renderers(self):
+        pack = read_source(SOURCE)
+        patch(pack)
+        near = pack["shaders/src/finalcolor.glsl"].decode()
+        far = pack["shaders/src/finalcolor_voxy.glsl"].decode()
+        night_palette = "vec3(0.1647, 0.3725, 0.6157)"
+        self.assertIn(night_palette, near)
+        self.assertIn(night_palette, far)
+        # Outside the water branch, Voxy's historical terrain tint remains.
+        self.assertIn("vec3 messyFogBase = vec3(0.592, 0.888, 1.233);", far)
 
     def test_voxy_clouds_obey_distant_terrain_depth(self):
         pack = read_source(SOURCE)
@@ -163,6 +189,10 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"MESSY_HIDE_CUSTOM_SKY", props)
         self.assertIn(b"screen.MESSY_WATER_SCREEN= MESSY_MOON_REFLECTION", props)
         self.assertIn(b"option.MESSY_MOON_REFLECTION=Moon Reflection on Water", lang)
+        self.assertIn(b"//#define MESSY_HIDE_VANILLA_CELESTIALS", config)
+        self.assertIn(b"MESSY_HIDE_VANILLA_CELESTIALS", props)
+        self.assertIn(b"#ifdef MESSY_HIDE_VANILLA_CELESTIALS\n    sun = false\n    moon = false", props)
+        self.assertIn(b"option.MESSY_HIDE_VANILLA_CELESTIALS=Hide Vanilla Sun and Moon", lang)
         for water, matrix in (
             ("shaders/lib/water.glsl", "gbufferModelViewInverse"),
             ("shaders/lib/water_voxy.glsl", "vxModelViewInv"),
