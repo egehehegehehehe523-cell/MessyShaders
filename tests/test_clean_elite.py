@@ -125,7 +125,7 @@ class CleanEliteTest(unittest.TestCase):
         self.assertNotIn(b"block_color.a = 1.0;", pack["shaders/common/water_blocks_fragment.glsl"])
         self.assertNotIn(b"blockColor.a = 1.0;", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         self.assertIn(b"#define MESSY_WATER_LIGHT_HANDOFF", pack["shaders/lib/config.glsl"])
-        self.assertIn(b"MESSY_WATER_LIGHT_HANDOFF MESSY_WATER_DEBUG", pack["shaders/shaders.properties"])
+        self.assertIn(b"MESSY_WATER_DEFERRED MESSY_WATER_LIGHT_HANDOFF MESSY_WATER_DEBUG", pack["shaders/shaders.properties"])
         self.assertIn(b"value.MESSY_WATER_DEBUG.2=Pre-Reflection Surface (Lit)",
                       pack["shaders/lang/en_US.lang"])
         self.assertIn(b"real_light = mix(real_light,\n                        messyWaterDistantLight(worldTime, rainStrength)",
@@ -142,11 +142,9 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"messyWaterDebugValue", pack["shaders/common/water_voxy_blocks_fragment.glsl"])
         fog = pack["shaders/src/finalcolor_voxy.glsl"].decode()
         self.assertIn("if (customId == ENTITY_WATER)", fog)
-        self.assertIn("messyNightMoment = mod(float(worldTime), 24000.0)", fog)
-        self.assertIn("vec3(0.1647, 0.3725, 0.6157)", fog)
-        self.assertIn("saturate(messyFogBase, 0.5)", fog)
-        self.assertIn("saturate(messyFogBase, 1.0)", fog)
-        self.assertIn("saturate(messyFogBase, -0.5)", fog)
+        self.assertIn("messyWaterSceneFog(gaux4, gl_FragCoord.xy", fog)
+        self.assertNotIn("messyNightMoment", fog)
+        self.assertIn("saturate(vec3(0.592, 0.888, 1.233), 0.5)", fog)
         self.assertIn("MESSY_VOXY_CONTACT_SHADOWS", pack["shaders/lib/config.glsl"].decode())
         solid = pack["shaders/common/solid_voxy_blocks_fragment.glsl"].decode()
         self.assertNotIn("MESSY_VOXY_SHADOW_CONTRAST", solid)
@@ -155,8 +153,9 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn("for (int messyI = 0; messyI < MESSY_VOXY_SHADOW_STEPS", deferred)
         self.assertIn("d3 >= messyDepth", deferred)
         self.assertIn("messyReceiverStability", deferred)
-        self.assertIn("messyNeighborDepth < 0.999999", deferred)
-        self.assertIn("block_color.rgb *= 1.0 - 0.55 *", deferred)
+        self.assertIn("messyCaster = texture2DLod(colortex17", deferred)
+        self.assertIn("min(messyThisHit, messyPreviousHit)", deferred)
+        self.assertIn("block_color.rgb *= 1.0 - 0.7 *", deferred)
         self.assertIn(b"MESSY_VOXY_SHADOW_STEPS [MESSY_WATER_SCREEN]", pack["shaders/shaders.properties"])
         for world in ("world0", "world-1", "world1", ""):
             root = f"shaders/{world}/" if world else "shaders/"
@@ -167,41 +166,44 @@ class CleanEliteTest(unittest.TestCase):
                 self.assertIn(b"#define MESSY_VOXY_LITE", lite)
         self.assertIn("messyLiteGlossWeight > 0.001", solid)
 
-    def test_night_water_fog_uses_same_palette_in_both_renderers(self):
+    def test_water_fog_tracks_actual_scene_sky_in_both_renderers(self):
         pack = read_source(SOURCE)
         patch(pack)
         near = pack["shaders/src/finalcolor.glsl"].decode()
         far = pack["shaders/src/finalcolor_voxy.glsl"].decode()
-        night_palette = "vec3(0.1647, 0.3725, 0.6157)"
-        self.assertIn(night_palette, near)
-        self.assertIn(night_palette, far)
-        self.assertIn("messyWaterNightFogWeight(worldTime)", near)
-        self.assertIn("messyNightMoment = mod(float(worldTime), 24000.0)", far)
-        self.assertIn("fogInfluence = mix(fogInfluence, 1.0, messyNightFog);", near)
-        self.assertIn("fogInfluence = mix(fogInfluence, 1.0, messyNightFog);", far)
         shared = pack["shaders/lib/messy_water_composite.glsl"].decode()
-        self.assertIn("float messyWaterNightFogWeight(int ticks)", shared)
+        self.assertIn("vec3 messyWaterSceneFog(sampler2D sceneSky, vec2 uv)", shared)
+        self.assertIn("texture2DLod(sceneSky, uv, 0.0).rgb", shared)
+        self.assertNotIn("messyWaterNightFogWeight", shared)
+        self.assertNotIn("messyNightFog", near + far)
         self.assertIn("vec4 messyWaterFogAfterBlend(vec4 source", shared)
-        self.assertIn("vec4 messyWaterNightHandoff(vec4 water", shared)
+        self.assertNotIn("messyWaterNightHandoff", shared)
         self.assertIn("f + (1.0 - f) * source.a", shared)
         self.assertIn("#define MESSY_WATER_FINALCOLOR", pack["shaders/common/water_blocks_fragment.glsl"].decode())
         self.assertIn("#define MESSY_WATER_FINALCOLOR_VOXY", pack["shaders/common/water_voxy_blocks_fragment.glsl"].decode())
         self.assertEqual(near.count("messyWaterFogAfterBlend(block_color"), 2)
         self.assertEqual(far.count("messyWaterFogAfterBlend(blockColor"), 2)
-        near_water = pack["shaders/common/water_blocks_fragment.glsl"].decode()
-        far_water = pack["shaders/common/water_voxy_blocks_fragment.glsl"].decode()
-        self.assertIn("messyWaterNightHandoff(block_color,\n                gl_FogFragCoord, far, worldTime)", near_water)
-        self.assertIn("messyWaterNightHandoff(blockColor,\n                fogFragCoord, float(vxRenderDistance * 16), worldTime)", far_water)
-        # Preserve the exact pre-v18 E-Lite far-water fog tint during daylight.
-        self.assertIn("vec3 messyFogBase = vec3(0.592, 0.888, 1.233);", far)
-        self.assertNotIn("messyFogBase = dayBlendVoxy(", far)
-        self.assertIn("#ifdef MESSY_WATER_PARITY", far)
-        # Daytime phase 6000 has weight 0; by 13000 it reaches 1.
-        self.assertIn("smoothstep(11500.0, 13000.0, moment)", shared)
-        # Outside the water branch, Voxy's historical terrain tint remains.
-        self.assertIn("vec3 messyFogBase = vec3(0.592, 0.888, 1.233);", far)
+        self.assertIn("messyWaterSceneFog(gaux4, gl_FragCoord.xy", near)
+        self.assertIn("messyWaterSceneFog(gaux4, gl_FragCoord.xy", far)
 
-    def test_water_nighttime_composite_and_handoff_identities(self):
+    def test_voxy_translucency_is_depth_composited_in_deferred(self):
+        pack = read_source(SOURCE)
+        patch(pack)
+        config = pack["shaders/lib/config.glsl"].decode()
+        manifest = pack["shaders/common/voxy.json"].decode()
+        deferred = pack["shaders/common/deferred_fragment.glsl"].decode()
+        self.assertIn("#define MESSY_WATER_DEFERRED", config)
+        self.assertIn("const int colortex16Format = RGBA16F;", config)
+        self.assertIn('"translucentDrawBuffers": [16]', manifest)
+        self.assertIn('0: "off"', manifest)
+        self.assertIn("uniform sampler2D colortex16;", deferred)
+        self.assertIn("texture2DLod(colortex16, messyWaterUv, 0)", deferred)
+        self.assertIn("vxProjInv * vec4(", deferred)
+        self.assertIn("gbufferProjectionInverse * vec4(", deferred)
+        self.assertIn("messyVanillaDistance - messyVoxyDistance", deferred)
+        self.assertIn("messyFarWater.rgb, messyVoxyAlpha", deferred)
+
+    def test_water_source_over_fog_identity_for_any_environment_brightness(self):
         from math import isclose
 
         def composite(source, alpha, backdrop):
@@ -214,33 +216,34 @@ class CleanEliteTest(unittest.TestCase):
                     (0.82, 0.3, 0.33),
                     (0.02, 0.9, 0.45),
                 ):
-                    # Original E-Lite daytime: fog only the water source.
-                    day_source = (1.0 - fog) * source + fog * fog_color
-                    day = composite(day_source, alpha, backdrop)
-                    # Night: fog AFTER source-over composition. The shader
-                    # re-expresses this using only src-alpha framebuffer blending.
+                    # Fog AFTER source-over is colour-independent. Both
+                    # renderers use the actual sky buffer for fog_color.
                     corrected_alpha = fog + (1.0 - fog) * alpha
                     corrected_source = ((1.0 - fog) * alpha * source +
                                         fog * fog_color) / corrected_alpha
-                    night = composite(corrected_source, corrected_alpha, backdrop)
+                    output = composite(corrected_source, corrected_alpha, backdrop)
                     expected = (1.0 - fog) * composite(source, alpha, backdrop) + fog * fog_color
-                    self.assertTrue(isclose(night, expected, abs_tol=1e-8))
-                    self.assertTrue(isclose(day, composite(day_source, alpha, backdrop), abs_tol=1e-8))
-                    # The nighttime LOD handoff removes dependence on
-                    # mismatched near/far underwater backgrounds, without
-                    # modifying either water RGB or the daytime alpha.
-                    at_night_handoff = composite(corrected_source, 1.0, backdrop)
-                    self.assertTrue(isclose(at_night_handoff, corrected_source, abs_tol=1e-8))
-                    at_day_handoff = composite(day_source, alpha, backdrop)
-                    self.assertTrue(isclose(at_day_handoff, day, abs_tol=1e-8))
+                    self.assertTrue(isclose(output, expected, abs_tol=1e-8))
 
-    def test_experimental_voxy_depth_shadows_are_opt_in(self):
+    def test_voxy_shadows_receive_material_tags_and_are_toggleable(self):
         pack = read_source(SOURCE)
         patch(pack)
         config = pack["shaders/lib/config.glsl"].decode()
-        self.assertIn("//#define MESSY_VOXY_CONTACT_SHADOWS", config)
-        self.assertNotIn("\n#define MESSY_VOXY_CONTACT_SHADOWS", config)
+        self.assertIn("#define MESSY_VOXY_CONTACT_SHADOWS", config)
+        self.assertIn("const int colortex17Format = RGBA8", config)
+        self.assertIn("layout(location = 2) out vec4 gbufferData2;",
+                      pack["shaders/common/solid_voxy_blocks_fragment.glsl"].decode())
+        self.assertIn("gbufferData2 = vec4(isFoliageEntity ? 1.0 : 0.0",
+                      pack["shaders/common/solid_voxy_blocks_fragment.glsl"].decode())
+        solid = pack["shaders/common/solid_voxy_blocks_fragment.glsl"].decode()
+        self.assertIn("customId == ENTITY_EMMISIVE", solid)
+        self.assertIn("customId == ENTITY_S_EMMISIVE", solid)
+        self.assertIn("customId == ENTITY_F_EMMISIVE", solid)
+        self.assertIn('"opaqueDrawBuffers": [1, 4, 17]',
+                      pack["shaders/common/voxy.json"].decode())
         self.assertIn("#if defined VOXY && defined MESSY_VOXY_CONTACT_SHADOWS",
+                      pack["shaders/common/deferred_fragment.glsl"].decode())
+        self.assertIn("messySoftShadow *= 1.0 - clamp(messyFogFade",
                       pack["shaders/common/deferred_fragment.glsl"].decode())
 
     def test_voxy_clouds_obey_distant_terrain_depth(self):
