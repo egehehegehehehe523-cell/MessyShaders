@@ -209,20 +209,91 @@ def patch_cloud_occlusion(pack: dict[str, bytes]) -> None:
                 "        #else\n            float distDH = 100000.0;")
 
 
-def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
-    """Trace sunward occluders in Voxy's already-rendered opaque depth.
+def patch_voxy_deferred_water(pack: dict[str, bytes]) -> None:
+    """Composite Voxy translucent RGBA at a known point in Iris's pipeline.
 
-    This is a deferred receiver pass, so it never samples the depth texture
-    while Voxy is writing to it. It follows Complementary's depth-ray idea,
-    but retains E-Lite's own color, water and material pipelines. The trace
-    only darkens opaque LOD pixels without a closer vanilla or water surface.
+    Voxy invokes translucent geometry before normal translucent gbuffers,
+    regardless of water. Writing its RGBA directly to the scene during that
+    earlier phase makes the result depend on previously drawn attachments.
+    Isolate its pixels in colortex16 and blend against the actual opaque scene
+    once, in the deferred pass. Vanilla water still renders later, as normal.
     """
+    fsh = "shaders/common/deferred_fragment.glsl"
+    replace_one(pack, fsh, "uniform sampler2D colortex1;",
+                "uniform sampler2D colortex1;\n"
+                "#if defined VOXY && defined MESSY_WATER_DEFERRED\n"
+                "    uniform sampler2D colortex16;\n"
+                "#endif")
+    replace_one(pack, fsh,
+                "    #ifdef VOXY\n"
+                "        float d3 = texture2DLod(vxDepthTexTrans, texcoord * RENDER_SCALE, 0).r;\n"
+                "    #endif",
+                """    #ifdef VOXY
+        float d3 = texture2DLod(vxDepthTexTrans, texcoord * RENDER_SCALE, 0).r;
+    #endif
+
+    #if defined VOXY && defined MESSY_WATER_DEFERRED && defined MESSY_WATER_PARITY
+        vec2 messyWaterUv = texcoord * RENDER_SCALE;
+        vec4 messyFarWater = texture2DLod(colortex16, messyWaterUv, 0);
+        if (messyFarWater.a > 0.001 && d3 < 0.999999) {
+            // Compare in view-space METRES/BLOCKS, not device depth: the
+            // regular camera and Voxy use different projection matrices.
+            vec4 messyVoxyView = vxProjInv * vec4(
+                messyWaterUv * 2.0 - 1.0, d3 * 2.0 - 1.0, 1.0);
+            float messyVoxyDistance = length(messyVoxyView.xyz / messyVoxyView.w);
+            float messyVanillaDistance = 1.0e9;
+            if (d < 0.999999) {
+                vec4 messyVanillaView = gbufferProjectionInverse * vec4(
+                    messyWaterUv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+                messyVanillaDistance = length(
+                    messyVanillaView.xyz / messyVanillaView.w);
+            }
+            // The next vanilla translucent pass will draw near-water over
+            // this result, respecting the original E-Lite surface shading.
+            float messyVisibility = smoothstep(-1.0, 1.0,
+                messyVanillaDistance - messyVoxyDistance);
+            float messyVoxyAlpha = clamp(messyFarWater.a * messyVisibility, 0.0, 1.0);
+            block_color.rgb = mix(block_color.rgb,
+                messyFarWater.rgb, messyVoxyAlpha);
+        }
+    #endif""")
+
+
+def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
+    """Material-aware LOD contact shadows on resolved Voxy opaque depth.
+
+    Keep the material/sky/sunlit receiver tags in a small RGBA8 attachment,
+    avoiding the previous unbounded depth-only treatment of leaves and
+    discontinuities. Require neighboring ray occlusion rather than reacting
+    to a single tiny or disoccluded Voxy depth pixel.
+    """
+    solid = "shaders/common/solid_voxy_blocks_fragment.glsl"
+    replace_one(pack, solid,
+                "layout(location = 1) out vec4 gbufferData1;",
+                "layout(location = 1) out vec4 gbufferData1;\n"
+                "#ifdef MESSY_VOXY_CONTACT_SHADOWS\n"
+                "layout(location = 2) out vec4 gbufferData2;\n"
+                "#endif")
+    replace_one(pack, solid,
+                "    gbufferData1 = blockColor;",
+                "    gbufferData1 = blockColor;\n"
+                "    #ifdef MESSY_VOXY_CONTACT_SHADOWS\n"
+                "        gbufferData2 = vec4(isFoliageEntity ? 1.0 : 0.0,\n"
+                "            clamp(visibleSky, 0.0, 1.0),\n"
+                "            (customId == ENTITY_EMMISIVE ||\n"
+                "             customId == ENTITY_S_EMMISIVE ||\n"
+                "             customId == ENTITY_F_EMMISIVE) ? 0.0 :\n"
+                "                clamp(directLightStrength, 0.0, 1.0), 1.0);\n"
+                "    #endif")
     fsh = "shaders/common/deferred_fragment.glsl"
     replace_one(pack, fsh,
                 "    uniform sampler2D vxDepthTexOpaque;",
                 "    uniform sampler2D vxDepthTexOpaque;\n"
                 "    uniform mat4 vxProj;\n    uniform mat4 vxModelView;\n"
-                "    uniform mat4 vxModelViewInv;")
+                "    uniform mat4 vxModelViewInv;\n"
+                "    #ifdef MESSY_VOXY_CONTACT_SHADOWS\n"
+                "        uniform sampler2D colortex17;\n"
+                "    #endif")
     replace_one(pack, fsh,
                 "#if V_CLOUDS > 0 && !defined UNKNOWN_DIM || AURORA > 0\n"
                 "    uniform sampler2D noisetex;\n    uniform vec3 cameraPosition;",
@@ -239,28 +310,23 @@ def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
     #endif
 
     #if defined VOXY && defined MESSY_VOXY_CONTACT_SHADOWS && !defined NETHER && !defined THE_END
-        // Complementary-style screen-space LOD cast shadows. Voxy depth is
-        // resolved before deferred; no read/write feedback or history buffer.
-        // Near vanilla terrain and translucent water keep their own lighting.
+        // Cast short sunward depth rays against stable opaque Voxy surfaces.
+        // The material attachment is produced with exactly the same Voxy
+        // geometry/depth, not reconstructed from a random terrain colour.
         vec2 messyPixelUv = texcoord * RENDER_SCALE;
         float messyDepth = texture2DLod(vxDepthTexOpaque, messyPixelUv, 0).r;
+        vec4 messyReceiver = texture2DLod(colortex17, messyPixelUv, 0);
         if (d >= 0.9999 && messyDepth < 0.999999 &&
-            d3 >= messyDepth && MESSY_VOXY_SHADOW_STRENGTH > 0.0) {
+            d3 >= messyDepth && messyReceiver.a > 0.5 &&
+            messyReceiver.g > 0.15 && MESSY_VOXY_SHADOW_STRENGTH > 0.0) {
             vec3 messySunWorld = normalize(mat3(gbufferModelViewInverse) * sunPosition);
             if (messySunWorld.y > 0.08) {
                 vec3 messyLight = normalize(mat3(vxModelView) * messySunWorld);
                 vec4 messyPoint = vxProjInv * vec4(messyPixelUv * 2.0 - 1.0,
                     messyDepth * 2.0 - 1.0, 1.0);
                 vec3 messyBase = messyPoint.xyz / messyPoint.w;
-                // Keep the Voxy water floor entirely out of cast shadows.
-                // The translucent depth buffer can quantize to the same
-                // value as the opaque bottom at very long LOD distances.
-                // In the Overworld, submerged solids are below sea level;
-                // do not darken them through transparent ocean water.
-                float messyWorldY = (vxModelViewInv * vec4(messyBase, 1.0)).y
-                    + cameraPosition.y;
-                // Thin foliage, voxel silhouettes and depth holes have
-                // unstable neighbor depth. They are not reliable receivers.
+                // A receiver at a depth discontinuity should retain E-Lite
+                // ambient light, rather than becoming a black shadow spike.
                 vec2 messyTexelSize = 1.0 / vec2(viewWidth, viewHeight);
                 float messyDepthRight = texture2DLod(vxDepthTexOpaque,
                     messyPixelUv + vec2(messyTexelSize.x, 0.0), 0).r;
@@ -272,18 +338,20 @@ def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
                 vec4 messyUp = vxProjInv * vec4((messyPixelUv +
                     vec2(0.0, messyTexelSize.y)) * 2.0 - 1.0,
                     messyDepthUp * 2.0 - 1.0, 1.0);
-                float messyReceiverStability = 1.0 - smoothstep(2.0, 8.0,
+                float messyReceiverStability = 1.0 - smoothstep(4.0, 14.0,
                     max(abs(messyRight.z / messyRight.w - messyBase.z),
                         abs(messyUp.z / messyUp.w - messyBase.z)));
                 if (messyDepthRight >= 0.999999 || messyDepthUp >= 0.999999)
                     messyReceiverStability = 0.0;
-                float messyDither = fract(dot(gl_FragCoord.xy,
-                    vec2(0.06711056, 0.00583715)));
-                float messyShade = 1.0;
-                if (messyWorldY > 65.5 && messyReceiverStability > 0.01)
+                // Leaves and fine model surfaces have their own sunlight
+                // response; accept only a muted cast-shadow contribution.
+                float messyMaterialReceiver = mix(1.0, 0.35, messyReceiver.r);
+                float messyShadowOcclusion = 0.0;
+                float messyPreviousHit = 0.0;
+                if (messyReceiverStability > 0.05)
                 for (int messyI = 0; messyI < MESSY_VOXY_SHADOW_STEPS; ++messyI) {
                     vec3 messyProbe = messyBase + messyLight *
-                        (5.0 + (float(messyI) + messyDither) * 4.0);
+                        (4.0 + float(messyI) * 3.0);
                     vec4 messyClip = vxProj * vec4(messyProbe, 1.0);
                     if (messyClip.w <= 0.0) break;
                     vec2 messySampleUv = messyClip.xy / messyClip.w * 0.5 + 0.5;
@@ -291,37 +359,41 @@ def patch_voxy_screen_shadows(pack: dict[str, bytes]) -> None:
                         any(greaterThan(messySampleUv, vec2(1.0)))) break;
                     float messySampleDepth = texture2DLod(vxDepthTexOpaque,
                         messySampleUv, 0).r;
+                    float messyThisHit = 0.0;
                     if (messySampleDepth < 0.999999) {
                         vec4 messyHit = vxProjInv * vec4(messySampleUv * 2.0 - 1.0,
                             messySampleDepth * 2.0 - 1.0, 1.0);
                         float messyOcclusion = messyHit.z / messyHit.w - messyProbe.z;
-                        if (messyOcclusion > 3.0 && messyOcclusion < 18.0) {
-                            // Reject single-pixel foliage silhouettes as
-                            // occluders; genuine LOD terrain has continuity.
-                            float messyNeighborDepth = texture2DLod(
-                                vxDepthTexOpaque, messySampleUv +
-                                vec2(messyTexelSize.x, 0.0), 0).r;
-                            vec4 messyNeighborHit = vxProjInv * vec4(
-                                (messySampleUv + vec2(messyTexelSize.x, 0.0))
-                                    * 2.0 - 1.0,
-                                messyNeighborDepth * 2.0 - 1.0, 1.0);
-                            if (messyNeighborDepth < 0.999999 &&
-                                abs(messyNeighborHit.z / messyNeighborHit.w -
-                                    messyHit.z / messyHit.w) < 5.0) {
-                                messyShade = 1.0 - smoothstep(3.0, 7.0,
-                                    messyOcclusion) *
-                                    (1.0 - smoothstep(11.0, 18.0,
-                                        messyOcclusion));
-                                break;
-                            }
+                        if (messyOcclusion > 1.5 && messyOcclusion < 12.0) {
+                            vec4 messyCaster = texture2DLod(colortex17,
+                                messySampleUv, 0);
+                            float messyThickness = smoothstep(1.5, 4.5,
+                                messyOcclusion) *
+                                (1.0 - smoothstep(8.0, 12.0, messyOcclusion));
+                            // Thinner LOD foliage casts softer shadows.
+                            messyThisHit = messyThickness * messyCaster.a *
+                                mix(1.0, 0.55, messyCaster.r);
                         }
                     }
+                    // Two consecutive hits reject one-pixel foliage/depth
+                    // glitches, eliminating the old randomly dark triangles.
+                    messyShadowOcclusion = max(messyShadowOcclusion,
+                        min(messyThisHit, messyPreviousHit));
+                    messyPreviousHit = messyThisHit;
                 }
-                // Screen-space shadows are a secondary contact cue, never
-                // allowed to black out existing E-Lite ambient illumination.
-                float messySoftShadow =
-                    (1.0 - messyShade) * messyReceiverStability;
-                block_color.rgb *= 1.0 - 0.55 *
+                float messySoftShadow = messyShadowOcclusion *
+                    messyReceiverStability * messyMaterialReceiver *
+                    messyReceiver.g * messyReceiver.b;
+                // LOD RGB is already atmospheric-fogged when deferred runs.
+                // Do not multiply fully fogged horizon colour by a dark
+                // contact shadow: that was another cause of black speckles.
+                float messyCameraDistance = length(messyBase);
+                float messyFogFade = smoothstep(
+                    far + float(MESSY_VOXY_FOG_START),
+                    far + float(MESSY_VOXY_FOG_START + MESSY_VOXY_FOG_SPAN),
+                    messyCameraDistance) * MESSY_VOXY_FOG_STRENGTH;
+                messySoftShadow *= 1.0 - clamp(messyFogFade, 0.0, 1.0);
+                block_color.rgb *= 1.0 - 0.7 *
                     MESSY_VOXY_SHADOW_STRENGTH * messySoftShadow;
             }
         }
@@ -373,13 +445,14 @@ def patch(pack: dict[str, bytes]) -> None:
 
     # Preserve the previous stable default: generated materials do not force
     # LabPBR on. Users may enable authored LabPBR via the original E-Lite menu.
-    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_WATER_PARITY // Match near and Voxy water absorption, depth and fog\n#define MESSY_WATER_LIGHT_HANDOFF // Blend vanilla water into the same distant lighting used by Voxy\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n#define MESSY_WATER_DEBUG 0 // [0 1 2 3 4] 0: Off, 1: Opacity, 2: Surface, 3: Reflection, 4: Render handoff\n"
+    pack[config] += b"\n#define MESSY_AUTO_PBR // Atlas-material fallback; authored maps have priority\n//#define MESSY_PBR_ENTITIES // Opt-in procedural normals for entity models\n#define MESSY_AUTO_PBR_STRENGTH 1.0 // [0.0 0.5 0.75 1.0 1.25 1.5]\n#define MESSY_AUTO_PBR_RESOLUTION 512 // [128 256 512 1024]\n#define MESSY_AUTO_PBR_DISTANCE 56 // [16 24 32 40 48 56 72]\n#define MESSY_VOXY_FOG // Shader-owned distant LOD fog\n#define MESSY_VOXY_FOG_START 128 // [0 64 128 256 512 1024]\n#define MESSY_VOXY_FOG_SPAN 1024 // [256 512 768 1024 1536 2048 4096]\n#define MESSY_VOXY_FOG_STRENGTH 0.75 // [0.0 0.25 0.5 0.75 1.0]\n#define MESSY_WATER_PARITY // Match near and Voxy water absorption, depth and fog\n#define MESSY_WATER_DEFERRED // Composite Voxy translucency against the scene in deferred\n#define MESSY_WATER_LIGHT_HANDOFF // Blend vanilla water into the same distant lighting used by Voxy\n#define MESSY_WATER_FOG_START 160 // [0 64 128 160 256 384 512]\n#define MESSY_WATER_FOG_SPAN 768 // [256 512 768 1024 1536 2048]\n#define MESSY_WATER_FOG_STRENGTH 0.85 // [0.0 0.25 0.5 0.75 0.85 1.0]\n#define MESSY_WATER_DEBUG 0 // [0 1 2 3 4 5] 0: Off, 1: Opacity, 2: Surface, 3: Reflection, 4: Coverage, 5: Final RGB\n/*\nconst int colortex16Format = RGBA16F;\nconst bool colortex16Clear = true;\nconst vec4 colortex16ClearColor = vec4(0.0, 0.0, 0.0, 0.0);\n*/\n"
 
     pack[config] += (b"#define MESSY_HIDE_CUSTOM_SKY // Hide custom resource-pack sky layers\n"
                      b"#define MESSY_MOON_REFLECTION 1 // [0 1 2] Off, subtle, bright moonlight glint\n")
-    pack[config] += (b"//#define MESSY_VOXY_CONTACT_SHADOWS // Experimental: depth-only shadows can misclassify foliage\n"
-                     b"#define MESSY_VOXY_SHADOW_STRENGTH 0.65 // [0.0 0.25 0.5 0.65 0.75 1.0]\n"
+    pack[config] += (b"#define MESSY_VOXY_CONTACT_SHADOWS // Material-aware distant sun shadows; can disable for performance\n"
+                     b"#define MESSY_VOXY_SHADOW_STRENGTH 0.5 // [0.0 0.25 0.5 0.65 0.75 1.0]\n"
                      b"#define MESSY_VOXY_SHADOW_STEPS 12 // [8 12 16 24]\n")
+    pack[config] += b"/*\nconst int colortex17Format = RGBA8;\nconst bool colortex17Clear = true;\nconst vec4 colortex17ClearColor = vec4(0.0, 0.0, 0.0, 0.0);\n*/\n"
 
     # Restore the last proven materials algorithm: four symmetric taps,
     # screen-footprint filtering and a distance fade. The previous release's
@@ -580,45 +653,24 @@ float messyWaterDistanceFog(float cameraDistance) {
         cameraDistance) * MESSY_WATER_FOG_STRENGTH;
 }
 
-// Both water renderers must agree at night. The previous change only
-// normalized Voxy's fog tint; its daytime-based fog-influence factor
-// remained independent of the vanilla water pass.
-float messyWaterNightFogWeight(int ticks) {
-    float moment = mod(float(ticks), 24000.0);
-    return smoothstep(11500.0, 13000.0, moment) *
-        (1.0 - smoothstep(22500.0, 23900.0, moment));
+// Both renderers sample the ACTUAL sky colour buffer. It is already driven
+// by the current light, skybox, weather and other colour changes. Keeping
+// the fog colour in this space avoids hand-picked day/night palette values.
+vec3 messyWaterSceneFog(sampler2D sceneSky, vec2 uv) {
+    return texture2DLod(sceneSky, uv, 0.0).rgb;
 }
 
 // Source-over water needs fog composited AFTER both its translucent surface
-// and the opaque scene beneath it. Fogging source RGB alone leaves an
-// un-fogged (1-alpha) background that differs strongly at the LOD boundary.
-// A' = f + (1-f)A, C' = ((1-f)A*C + f*F) / A' is algebraically equivalent to
-// mix(A*C + (1-A)*background, F, f) with ordinary src-alpha blending.
-// At daytime nightMix=0 and this returns E-Lite's exact legacy operation.
+// and the opaque scene beneath it. Re-express it as straight-alpha blending:
+// A' = f + (1-f)A, C' = ((1-f)A*C + f*F) / A'.
+// This identity holds for all sky colours, weather, exposure and time of day.
 vec4 messyWaterFogAfterBlend(vec4 source, vec3 fogColor,
-                             float fogStrength, float nightMix) {
+                             float fogStrength) {
     float f = clamp(fogStrength, 0.0, 1.0);
-    vec4 original = vec4(mix(source.rgb, fogColor, f), source.a);
     float correctedAlpha = f + (1.0 - f) * source.a;
     vec3 correctedRgb = ((1.0 - f) * source.a * source.rgb +
         f * fogColor) / max(correctedAlpha, 0.001);
-    return mix(original, vec4(correctedRgb, correctedAlpha),
-        clamp(nightMix, 0.0, 1.0));
-}
-
-// The near renderer and Voxy have different opaque scene buffers under the
-// same translucent ocean. Even identical water RGB and absorption expose
-// this difference whenever alpha < 1. At nighttime, fade the underlying
-// scene out before the near-to-LOD handoff; keep the surface/reflections and
-// all daytime transparency unmodified. Both renderers use the same range.
-vec4 messyWaterNightHandoff(vec4 water, float cameraDistance,
-                            float nearRange, int ticks) {
-    float start = max(nearRange * 0.55, 1.0);
-    float finish = max(nearRange * 0.90, start + 1.0);
-    float handoff = smoothstep(start, finish, cameraDistance) *
-        messyWaterNightFogWeight(ticks);
-    water.a = mix(water.a, 1.0, handoff);
-    return water;
+    return vec4(correctedRgb, correctedAlpha);
 }
 
 // Vanilla water calculates illumination in light_vertex.glsl; Voxy does it
@@ -695,15 +747,6 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 '    #include "/src/finalcolor.glsl"\n'
                 '    #undef MESSY_WATER_FINALCOLOR')
     near_finalcolor = "shaders/src/finalcolor.glsl"
-    replace_one(pack, near_finalcolor,
-                '        vec3 fogColorMod = dayBlend(saturate(vec3(0.2392, 0.4039, 0.5922), dayBF(dayBF(1.0, 1.0, 5.0), 1.0, dayBF(5.0, 1.0, 1.0))), vec3(0.3, 0.45, 0.615), vec3(0.1647, 0.3725, 0.6157));',
-                '''        vec3 fogColorMod = dayBlend(saturate(vec3(0.2392, 0.4039, 0.5922), dayBF(dayBF(1.0, 1.0, 5.0), 1.0, dayBF(5.0, 1.0, 1.0))), vec3(0.3, 0.45, 0.615), vec3(0.1647, 0.3725, 0.6157));
-        #if defined MESSY_WATER_FINALCOLOR && defined MESSY_WATER_PARITY && defined VOXY
-            float messyNightFog = messyWaterNightFogWeight(worldTime);
-            fogColorMod = mix(fogColorMod,
-                vec3(0.1647, 0.3725, 0.6157), messyNightFog);
-            fogInfluence = mix(fogInfluence, 1.0, messyNightFog);
-        #endif''')
     legacy_near = "block_color.rgb = mix(block_color.rgb, fog_texture, fog_adj);"
     near_fog_source = pack[near_finalcolor].decode()
     if near_fog_source.count(legacy_near) != 2:
@@ -711,8 +754,8 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     near_fog_source = near_fog_source.replace(legacy_near, """#if defined MESSY_WATER_FINALCOLOR && defined MESSY_WATER_PARITY && defined VOXY
                     if (block_type > 2.9 && block_type < 3.1)
                         block_color = messyWaterFogAfterBlend(block_color,
-                            fog_texture, fog_adj,
-                            messyWaterNightFogWeight(worldTime));
+                            messyWaterSceneFog(gaux4, gl_FragCoord.xy *
+                                vec2(pixelSizeX, pixelSizeY)), fog_adj);
                     else
                         block_color.rgb = mix(block_color.rgb, fog_texture, fog_adj);
                 #else
@@ -817,42 +860,11 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
             #if WATER_COLOR_SOURCE == 0
                 blockColor.rgb = waterTexture * realLight * WATER_COLOR;""")
 
-    # Keep original E-Lite/accepted daytime Voxy fog EXACTLY. The v18 attempt
-    # changed this tint throughout the daytime via dayBlendVoxy, breaking the
-    # previously approved daytime transition. Only at night do both water
-    # passes converge on the same tint and fog-influence term.
+    # Preserve original E-Lite fog on terrain, foliage and entities. Both
+    # water paths instead sample the current scene sky, not a hardcoded
+    # blue palette keyed to Minecraft time. This follows dynamic skyboxes,
+    # brightness, weather and custom colours at any time of day.
     far_finalcolor = "shaders/src/finalcolor_voxy.glsl"
-    replace_one(pack, far_finalcolor,
-                "        #if FOG_TINT == 0\n"
-                "            vec3 fogColorMod = mix(saturate(vec3(0.592, 0.888, 1.233), 0.5), vec3(1.0), frogAdjust);\n"
-                "        #elif FOG_TINT == 1\n"
-                "            vec3 fogColorMod = mix(saturate(vec3(0.592, 0.888, 1.233), 1.0), vec3(1.0), frogAdjust);\n"
-                "        #elif FOG_TINT == 2\n"
-                "            vec3 fogColorMod = mix(saturate(vec3(0.592, 0.888, 1.233), -0.5), vec3(1.0), frogAdjust);\n"
-                "        #endif",
-                """        vec3 messyFogBase = vec3(0.592, 0.888, 1.233);
-        #ifdef MESSY_WATER_PARITY
-            if (customId == ENTITY_WATER) {
-                // When the night blend is zero, the precise original E-Lite
-                // far-water fog is preserved, with no change to day parity.
-                // finalcolor_voxy.glsl also runs in opaque Voxy programs,
-                // which do not include the water-only shared helper.
-                float messyNightMoment = mod(float(worldTime), 24000.0);
-                float messyNightFog =
-                    smoothstep(11500.0, 13000.0, messyNightMoment) *
-                    (1.0 - smoothstep(22500.0, 23900.0, messyNightMoment));
-                messyFogBase = mix(messyFogBase,
-                    vec3(0.1647, 0.3725, 0.6157), messyNightFog);
-                fogInfluence = mix(fogInfluence, 1.0, messyNightFog);
-            }
-        #endif
-        #if FOG_TINT == 0
-            vec3 fogColorMod = mix(saturate(messyFogBase, 0.5), vec3(1.0), frogAdjust);
-        #elif FOG_TINT == 1
-            vec3 fogColorMod = mix(saturate(messyFogBase, 1.0), vec3(1.0), frogAdjust);
-        #elif FOG_TINT == 2
-            vec3 fogColorMod = mix(saturate(messyFogBase, -0.5), vec3(1.0), frogAdjust);
-        #endif""")
     legacy_far = "blockColor.rgb = mix(blockColor.rgb, fog_texture, frogAdjust);"
     far_fog_source = pack[far_finalcolor].decode()
     if far_fog_source.count(legacy_far) != 2:
@@ -860,8 +872,8 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     far_fog_source = far_fog_source.replace(legacy_far, """#if defined MESSY_WATER_FINALCOLOR_VOXY && defined MESSY_WATER_PARITY
                     if (customId == ENTITY_WATER)
                         blockColor = messyWaterFogAfterBlend(blockColor,
-                            fog_texture, frogAdjust,
-                            messyWaterNightFogWeight(worldTime));
+                            messyWaterSceneFog(gaux4, gl_FragCoord.xy *
+                                vec2(pixelSizeX, pixelSizeY)), frogAdjust);
                     else
                         blockColor.rgb = mix(blockColor.rgb, fog_texture, frogAdjust);
                 #else
@@ -940,17 +952,23 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                     "                #elif MESSY_WATER_DEBUG == 4\n"
                     f"                    messyWaterDebugValue = vec4({color}, 0.5);\n"
                     "                #endif")
+        # Debug 5 deliberately emits the final water RGB as fully opaque.
+        # If a seam is present in mode 5, it is a colour/light mismatch;
+        # if mode 5 is smooth but normal mode isn't, it's compositing/depth.
+        debug_override = ("        #if MESSY_WATER_DEBUG == 5\n"
+                          f"            if ({water_check}) {color_name} = vec4({color_name}.rgb, 1.0);\n"
+                          "        #else\n"
+                          f"            if ({water_check}) {color_name} = messyWaterDebugValue;\n"
+                          "        #endif\n")
         if path == near_water:
             replace_one(pack, path, '    #include "/src/writebuffers.glsl"',
                         "    #if defined MESSY_WATER_PARITY && defined VOXY && MESSY_WATER_DEBUG > 0\n"
-                        f"        if ({water_check}) {color_name} = messyWaterDebugValue;\n"
-                        "    #endif\n"
+                        + debug_override + "    #endif\n"
                         '    #include "/src/writebuffers.glsl"')
         else:
             replace_one(pack, path, "    gbufferData0 = blockColor;",
                         "    #if defined MESSY_WATER_PARITY && MESSY_WATER_DEBUG > 0\n"
-                        f"        if ({water_check}) {color_name} = messyWaterDebugValue;\n"
-                        "    #endif\n    gbufferData0 = blockColor;")
+                        + debug_override + "    #endif\n    gbufferData0 = blockColor;")
     replace_one(pack, near_lib,
                 "    return mix(texture2D(gaux1, pos.xy).rgb * mix(vec3(0.95, 1.0, 1.0), vec3(0.8, 1.1, 1.4) * 0.9, water_absortion), color, water_absortion);",
                 """    #ifdef MESSY_WATER_PARITY
@@ -983,6 +1001,31 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 '    0: "SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA"\n'
                 '  },\n'
                 '  "opaqueDrawBuffers": [1, 4],')
+    # Voxy translucency otherwise blends straight into colortex1 immediately
+    # after its opaque pass, before normal Iris transparency/deferred. Stash
+    # the water surface unblended and depth-test it in the fullscreen deferred
+    # pass against the same real scene buffer used by vanilla water.
+    replace_one(pack, voxy_json,
+                '    0: "SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA"',
+                '''    #ifdef MESSY_WATER_DEFERRED
+    0: "off"
+    #else
+    0: "SRC_ALPHA ONE_MINUS_SRC_ALPHA ONE ONE_MINUS_SRC_ALPHA"
+    #endif''')
+    replace_one(pack, voxy_json,
+                '  "translucentDrawBuffers": [1]',
+                '''  #ifdef MESSY_WATER_DEFERRED
+  "translucentDrawBuffers": [16]
+  #else
+  "translucentDrawBuffers": [1]
+  #endif''')
+    replace_one(pack, voxy_json,
+                '  "opaqueDrawBuffers": [1, 4],',
+                '''  #ifdef MESSY_VOXY_CONTACT_SHADOWS
+  "opaqueDrawBuffers": [1, 4, 17],
+  #else
+  "opaqueDrawBuffers": [1, 4],
+  #endif''')
     # Complementary enables this same blend rule for both regular
     # gbuffers_water and Voxy translucency. Do not turn it off for vanilla
     # water: the shader also handles glass and ice in this pass.
@@ -1017,11 +1060,6 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     #include "/src/finalcolor.glsl"
     #if defined FOG_ACTIVE && defined MESSY_WATER_PARITY
         #undef fog_adj
-    #endif
-    #if defined MESSY_WATER_PARITY && defined VOXY
-        if (is_water > 0.5)
-            block_color = messyWaterNightHandoff(block_color,
-                gl_FogFragCoord, far, worldTime);
     #endif"""
     unified_far += """    #ifdef MESSY_WATER_PARITY
         // Override E-Lite's built-in Voxy horizon fog for water only.
@@ -1033,11 +1071,6 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     #define MESSY_WATER_FINALCOLOR_VOXY
     #include "/src/finalcolor_voxy.glsl"
     #undef MESSY_WATER_FINALCOLOR_VOXY
-    #ifdef MESSY_WATER_PARITY
-        if (customId == ENTITY_WATER)
-            blockColor = messyWaterNightHandoff(blockColor,
-                fogFragCoord, float(vxRenderDistance * 16), worldTime);
-    #endif
 """
     replace_one(pack, near_water, '    #include "/src/finalcolor.glsl"', unified_near)
     replace_one(pack, water, '    #include "/src/finalcolor_voxy.glsl"', unified_far)
@@ -1071,19 +1104,19 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE MESSY_PBR_ENTITIES POM_DEPTH POM_STEPS SS_SAMPLES")
     replace_one(pack, props, "[LabPBR] [INFO_SCREEN]",
                 "[LabPBR] [MESSY_FEATURES] [INFO_SCREEN]")
-    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_WATER_LIGHT_HANDOFF MESSY_WATER_DEBUG MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH\n"
+    pack[props] += b"\nscreen.MESSY_FEATURES.columns=2\nscreen.MESSY_FEATURES= [MESSY_MATERIALS_SCREEN] [MESSY_VOXY_SCREEN] [MESSY_WATER_SCREEN] PERF_IMPACT\nscreen.MESSY_MATERIALS_SCREEN= MESSY_AUTO_PBR MESSY_PBR_ENTITIES MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION MESSY_AUTO_PBR_DISTANCE\nscreen.MESSY_WATER_SCREEN= MESSY_WATER_DEFERRED MESSY_WATER_LIGHT_HANDOFF MESSY_WATER_DEBUG MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH\n"
     replace_one(pack, props, "sliders = ",
                 "sliders = MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION "
                 "MESSY_AUTO_PBR_DISTANCE MESSY_VOXY_FOG_START "
                 "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_VOXY_SHADOW_STRENGTH MESSY_VOXY_SHADOW_STEPS MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH ")
-    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Lighting and Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_LIGHT_HANDOFF=Match Distant Water Lighting\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Pre-Reflection Surface (Lit)\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_VOXY_CONTACT_SHADOWS=Voxy Screen-Space Cast Shadows\noption.MESSY_VOXY_CONTACT_SHADOWS.comment=Trace Voxy opaque depth towards the sun, like Complementary. Extra GPU work at LOD-heavy views.\noption.MESSY_VOXY_SHADOW_STRENGTH=Voxy Cast Shadow Darkness\noption.MESSY_VOXY_SHADOW_STEPS=Voxy Shadow Trace Steps\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=IntegratedPBR on Entities\noption.MESSY_PBR_ENTITIES.comment=Apply automatic texture-detail normals to mobs and other entities. Off by default; may increase GPU cost.\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
+    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Lighting and Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_DEFERRED=Deferred Voxy Transparency\noption.MESSY_WATER_DEFERRED.comment=Composite distant water in a separate buffer after opaque depth; fixes brightness-dependent water seams. Extra HDR colour buffer.\noption.MESSY_WATER_LIGHT_HANDOFF=Match Distant Water Lighting\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Pre-Reflection Surface (Lit)\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\nvalue.MESSY_WATER_DEBUG.5=Final Surface Colour (Opaque)\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_VOXY_CONTACT_SHADOWS=Voxy Material-Aware Cast Shadows\noption.MESSY_VOXY_CONTACT_SHADOWS.comment=Depth rays with material and sky-light masks; tune steps or disable for GPU performance.\noption.MESSY_VOXY_SHADOW_STRENGTH=Voxy Cast Shadow Darkness\noption.MESSY_VOXY_SHADOW_STEPS=Voxy Shadow Trace Steps\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=IntegratedPBR on Entities\noption.MESSY_PBR_ENTITIES.comment=Apply automatic texture-detail normals to mobs and other entities. Off by default; may increase GPU cost.\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
 
     replace_one(pack, props,
                 "screen.SKY_SCREEN = COLOR_SCHEME [CUSTOM_COLORS_SCREEN] <empty> <empty> SIMPLE_SKY BIOME_SKY BIOME_FOG SANDSTORM <empty> <empty> STAR_SLIDER END_STARS STARS_BRIGHTNESS STARS_COVERAGE AURORA CUSTOM_SKYFIX",
                 "screen.SKY_SCREEN = COLOR_SCHEME [CUSTOM_COLORS_SCREEN] <empty> <empty> SIMPLE_SKY BIOME_SKY BIOME_FOG SANDSTORM <empty> <empty> STAR_SLIDER END_STARS STARS_BRIGHTNESS STARS_COVERAGE AURORA CUSTOM_SKYFIX MESSY_HIDE_CUSTOM_SKY")
     replace_one(pack, props,
-                "screen.MESSY_WATER_SCREEN= MESSY_WATER_LIGHT_HANDOFF",
-                "screen.MESSY_WATER_SCREEN= MESSY_MOON_REFLECTION MESSY_WATER_LIGHT_HANDOFF")
+                "screen.MESSY_WATER_SCREEN= MESSY_WATER_DEFERRED MESSY_WATER_LIGHT_HANDOFF",
+                "screen.MESSY_WATER_SCREEN= MESSY_MOON_REFLECTION MESSY_WATER_DEFERRED MESSY_WATER_LIGHT_HANDOFF")
     pack[lang] += (b"option.MESSY_HIDE_CUSTOM_SKY=Hide Resource-Pack Sky Overlays\n"
                    b"option.MESSY_HIDE_CUSTOM_SKY.comment=Suppress Iris custom-sky layers; does not disable Golem Core or other mod sky renderers.\n"
                    b"option.MESSY_MOON_REFLECTION=Moon Reflection on Water\n"
@@ -1102,6 +1135,7 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     apply_colorwheel(pack)
     patch_cloud_occlusion(pack)
     patch_voxy_screen_shadows(pack)
+    patch_voxy_deferred_water(pack)
     patch_custom_sky_and_moon_glint(pack)
     patch_voxy_lite_pair(pack)
 
