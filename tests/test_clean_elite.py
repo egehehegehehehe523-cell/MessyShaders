@@ -19,6 +19,7 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/common/solid_voxy_blocks_fragment.glsl",
             "shaders/common/water_voxy_blocks_fragment.glsl",
             "shaders/common/water_blocks_fragment.glsl",
+            "shaders/common/skytextured_fragment.glsl",
             "shaders/common/deferred_fragment.glsl",
             "shaders/common/clouds_blocks_fragment.glsl",
             "shaders/lib/volumetric_clouds.glsl",
@@ -147,6 +148,32 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn("1.0, 1.0, 1.0e7);", pack["shaders/common/water_blocks_fragment.glsl"].decode())
         self.assertIn("float depthVoxy = texture2D(vxDepthTexOpaque, screenCoord).r;", vanilla)
         self.assertIn("float distDH = mix(length(vxViewPos.xyz)", vanilla)
+
+    def test_custom_sky_suppression_and_moon_glint(self):
+        pack = read_source(SOURCE)
+        patch(pack)
+        config = pack["shaders/lib/config.glsl"]
+        props = pack["shaders/shaders.properties"]
+        lang = pack["shaders/lang/en_US.lang"]
+        sky = pack["shaders/common/skytextured_fragment.glsl"]
+        self.assertIn(b"#define MESSY_HIDE_CUSTOM_SKY", config)
+        self.assertIn(b"#define MESSY_MOON_REFLECTION 1 // [0 1 2]", config)
+        self.assertIn(b"#ifdef MESSY_HIDE_CUSTOM_SKY", sky)
+        self.assertIn(b"renderStage == MC_RENDER_STAGE_CUSTOM_SKY", sky)
+        self.assertIn(b"MESSY_HIDE_CUSTOM_SKY", props)
+        self.assertIn(b"screen.MESSY_WATER_SCREEN= MESSY_MOON_REFLECTION", props)
+        self.assertIn(b"option.MESSY_MOON_REFLECTION=Moon Reflection on Water", lang)
+        for water, matrix in (
+            ("shaders/lib/water.glsl", "gbufferModelViewInverse"),
+            ("shaders/lib/water_voxy.glsl", "vxModelViewInv"),
+        ):
+            body = pack[water].decode()
+            self.assertIn("#if SUN_REFLECTION > 0 || MESSY_MOON_REFLECTION > 0", body)
+            self.assertIn(f"mat3({matrix}) * astro_pos", body)
+            self.assertNotIn(f"mat3({matrix}) * sunPosition", body)
+            self.assertIn("float(MESSY_MOON_REFLECTION) * 0.5", body)
+            self.assertIn("if (worldTime <= 13200) messyAstroStrength = 0.0;", body)
+        self.assertIn(b"vec4 messyWaterCompose", pack["shaders/lib/messy_water_composite.glsl"])
 
     def test_same_water_compositor_is_mathematically_consistent(self):
         # Verify the shared GLSL source-over decomposition for both pipelines:
