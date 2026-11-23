@@ -32,6 +32,14 @@ class CleanEliteTest(unittest.TestCase):
             "shaders/clrwl_gbuffers.vsh", "shaders/clrwl_gbuffers.fsh",
             "shaders/clrwl_shadow.vsh", "shaders/clrwl_shadow.fsh",
             "shaders/colorwheel.properties",
+            "shaders/world0/voxy_opaque_lite.glsl",
+            "shaders/world0/voxy_translucent_lite.glsl",
+            "shaders/world-1/voxy_opaque_lite.glsl",
+            "shaders/world-1/voxy_translucent_lite.glsl",
+            "shaders/world1/voxy_opaque_lite.glsl",
+            "shaders/world1/voxy_translucent_lite.glsl",
+            "shaders/voxy_opaque_lite.glsl",
+            "shaders/voxy_translucent_lite.glsl",
         })
         self.assertNotIn("messyRgb", b"".join(pack.values()).decode("utf-8", "ignore"))
         for path in ("shaders/common/solid_voxy_blocks_fragment.glsl",
@@ -138,13 +146,22 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn("saturate(messyFogBase, 0.5)", fog)
         self.assertIn("saturate(messyFogBase, 1.0)", fog)
         self.assertIn("saturate(messyFogBase, -0.5)", fog)
-        self.assertIn("MESSY_VOXY_SHADOW_CONTRAST", pack["shaders/lib/config.glsl"].decode())
+        self.assertIn("MESSY_VOXY_CONTACT_SHADOWS", pack["shaders/lib/config.glsl"].decode())
         solid = pack["shaders/common/solid_voxy_blocks_fragment.glsl"].decode()
-        self.assertIn("omniLight *= mix(1.0, 0.52, messyVoxyShadow);", solid)
-        self.assertIn("directLightStrength *= mix(1.0, 0.70, messyVoxyShadow);", solid)
-        self.assertIn("customId != ENTITY_EMMISIVE", solid)
-        self.assertNotIn("MESSY_VOXY_SHADOW_CONTRAST > 0\n", solid)
-        self.assertIn(b"MESSY_VOXY_SHADOW_CONTRAST [MESSY_WATER_SCREEN]", pack["shaders/shaders.properties"])
+        self.assertNotIn("MESSY_VOXY_SHADOW_CONTRAST", solid)
+        deferred = pack["shaders/common/deferred_fragment.glsl"].decode()
+        self.assertIn("messySampleDepth = texture2DLod(vxDepthTexOpaque", deferred)
+        self.assertIn("for (int messyI = 0; messyI < MESSY_VOXY_SHADOW_STEPS", deferred)
+        self.assertIn("d3 >= messyDepth", deferred)
+        self.assertIn(b"MESSY_VOXY_SHADOW_STEPS [MESSY_WATER_SCREEN]", pack["shaders/shaders.properties"])
+        for world in ("world0", "world-1", "world1", ""):
+            root = f"shaders/{world}/" if world else "shaders/"
+            for surface in ("opaque", "translucent"):
+                lite = pack[f"{root}voxy_{surface}_lite.glsl"]
+                self.assertIn(b"VOXY_LITE_CONTRACT api=1;", lite)
+                self.assertIn(b"transition=pack-distance-fade", lite)
+                self.assertIn(b"#define MESSY_VOXY_LITE", lite)
+        self.assertIn("messyLiteGlossWeight > 0.001", solid)
 
     def test_night_water_fog_uses_same_palette_in_both_renderers(self):
         pack = read_source(SOURCE)
@@ -189,10 +206,9 @@ class CleanEliteTest(unittest.TestCase):
         self.assertIn(b"MESSY_HIDE_CUSTOM_SKY", props)
         self.assertIn(b"screen.MESSY_WATER_SCREEN= MESSY_MOON_REFLECTION", props)
         self.assertIn(b"option.MESSY_MOON_REFLECTION=Moon Reflection on Water", lang)
-        self.assertIn(b"//#define MESSY_HIDE_VANILLA_CELESTIALS", config)
-        self.assertIn(b"MESSY_HIDE_VANILLA_CELESTIALS", props)
-        self.assertIn(b"#ifdef MESSY_HIDE_VANILLA_CELESTIALS\n    sun = false\n    moon = false", props)
-        self.assertIn(b"option.MESSY_HIDE_VANILLA_CELESTIALS=Hide Vanilla Sun and Moon", lang)
+        self.assertNotIn(b"MESSY_HIDE_VANILLA_CELESTIALS", config)
+        self.assertNotIn(b"MESSY_HIDE_VANILLA_CELESTIALS", props)
+        self.assertNotIn(b"MESSY_HIDE_VANILLA_CELESTIALS", lang)
         for water, matrix in (
             ("shaders/lib/water.glsl", "gbufferModelViewInverse"),
             ("shaders/lib/water_voxy.glsl", "vxModelViewInv"),
