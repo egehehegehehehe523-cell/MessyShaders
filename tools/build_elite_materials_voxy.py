@@ -30,11 +30,27 @@ def replace_one(pack: dict[str, bytes], path: str, old: str, new: str) -> None:
 
 
 def patch_custom_sky_and_moon_glint(pack: dict[str, bytes]) -> None:
-    """Hide custom sky layers and repair high-quality moon glints on water.
+    """Hide resource sky layers and repair high-quality moon glints on water.
 
     Only the sun/moon highlight changes in the two water implementations;
     neither the shared water compositor nor the Voxy handoff is touched.
     """
+    props = "shaders/shaders.properties"
+    replace_one(pack, props,
+                "#if ROUND_SUN == 1\n    sun = false\n#else\n    sun = true\n#endif\n\nmoon = true",
+                """// Optional compatibility for external celestial renderers (e.g. NTM: Space).
+// These Iris flags suppress vanilla discs, not third-party Golem Core skyboxes.
+#ifdef MESSY_HIDE_VANILLA_CELESTIALS
+    sun = false
+    moon = false
+#else
+    #if ROUND_SUN == 1
+        sun = false
+    #else
+        sun = true
+    #endif
+    moon = true
+#endif""")
     sky = "shaders/common/skytextured_fragment.glsl"
     replace_one(pack, sky, "uniform sampler2D tex;",
                 "uniform sampler2D tex;\n#ifdef IS_IRIS\n    uniform int renderStage;\n#endif")
@@ -222,6 +238,8 @@ def patch(pack: dict[str, bytes]) -> None:
 
     pack[config] += (b"#define MESSY_HIDE_CUSTOM_SKY // Hide custom resource-pack sky layers\n"
                      b"#define MESSY_MOON_REFLECTION 1 // [0 1 2] Off, subtle, bright moonlight glint\n")
+    pack[config] += (b"//#define MESSY_HIDE_VANILLA_CELESTIALS // Opt-in: suppress vanilla sun/moon discs but keep mod sky passes\n"
+                     b"#define MESSY_VOXY_SHADOW_CONTRAST 1.5 // [0.0 0.5 1.0 1.25 1.5 2.0 3.0]\n")
 
     # Restore the last proven materials algorithm: four symmetric taps,
     # screen-footprint filtering and a distance fade. The previous release's
@@ -585,6 +603,46 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
             #endif
             #if WATER_COLOR_SOURCE == 0
                 blockColor.rgb = waterTexture * realLight * WATER_COLOR;""")
+
+    # E-Lite's Voxy finalcolor originally hardcodes a bright daytime fog
+    # multiplier, even at midnight, while vanilla water smoothly changes from
+    # sunset to much darker night fog. At the 0.85-strength distance fog this
+    # produces a very visible dark near-water rectangle at night despite
+    # equalized water surface lighting and opacity. Match the fog *colour* law
+    # on the water path only; leave terrain and the user's day-water parity.
+    far_finalcolor = "shaders/src/finalcolor_voxy.glsl"
+    replace_one(pack, far_finalcolor,
+                "        #if FOG_TINT == 0\n"
+                "            vec3 fogColorMod = mix(saturate(vec3(0.592, 0.888, 1.233), 0.5), vec3(1.0), frogAdjust);\n"
+                "        #elif FOG_TINT == 1\n"
+                "            vec3 fogColorMod = mix(saturate(vec3(0.592, 0.888, 1.233), 1.0), vec3(1.0), frogAdjust);\n"
+                "        #elif FOG_TINT == 2\n"
+                "            vec3 fogColorMod = mix(saturate(vec3(0.592, 0.888, 1.233), -0.5), vec3(1.0), frogAdjust);\n"
+                "        #endif",
+                """        vec3 messyFogBase = vec3(0.592, 0.888, 1.233);
+        #ifdef MESSY_WATER_PARITY
+            if (customId == ENTITY_WATER) {
+                // Same sunset/day/night fog palette as finalcolor.glsl.
+                // Keep Voxy's own day interpolation only for its sky state.
+                float messyFogSunsetSaturation = dayBlendFloatVoxyN(
+                    dayBlendFloatVoxyN(1.0, 1.0, 5.0, dayMixerV, nightMixerV, dayMomentV),
+                    1.0,
+                    dayBlendFloatVoxyN(5.0, 1.0, 1.0, dayMixerV, nightMixerV, dayMomentV),
+                    dayMixerV, nightMixerV, dayMomentV);
+                messyFogBase = dayBlendVoxy(
+                    saturate(vec3(0.2392, 0.4039, 0.5922), messyFogSunsetSaturation),
+                    vec3(0.3, 0.45, 0.615),
+                    vec3(0.1647, 0.3725, 0.6157),
+                    dayMixerV, nightMixerV, dayMomentV);
+            }
+        #endif
+        #if FOG_TINT == 0
+            vec3 fogColorMod = mix(saturate(messyFogBase, 0.5), vec3(1.0), frogAdjust);
+        #elif FOG_TINT == 1
+            vec3 fogColorMod = mix(saturate(messyFogBase, 1.0), vec3(1.0), frogAdjust);
+        #elif FOG_TINT == 2
+            vec3 fogColorMod = mix(saturate(messyFogBase, -0.5), vec3(1.0), frogAdjust);
+        #endif""")
     replace_one(pack, far_lib,
                 "    bump *= vec3(NdotE) + vec3(0.0, 0.0, 1.0 - NdotE);",
                 "    bump *= vec3(NdotE) + vec3(0.05, 0.1, 1.0 - NdotE);")
@@ -766,10 +824,30 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
 """
         pack[path] = source.replace(anchor, addition + anchor, 1).encode("utf-8")
 
+    # Voxy LODs do not receive E-Lite's nearby shadow map. Darken existing
+    # voxel skylight occlusion rather than tracing expensive long-range rays
+    # or touching the Voxy renderer. Exposed surfaces and emissive voxels
+    # retain their original lighting.
+    far_solid = "shaders/common/solid_voxy_blocks_fragment.glsl"
+    replace_one(pack, far_solid,
+                "    float block_luma = luma(blockColor.rgb);",
+                """    #if !defined NETHER && !defined THE_END
+        if (MESSY_VOXY_SHADOW_CONTRAST > 0.0 &&
+            customId != ENTITY_EMMISIVE && customId != ENTITY_S_EMMISIVE) {
+            float messyOccludedSky = clamp(1.0 - visibleSky, 0.0, 1.0);
+            float messyVoxyShadow = clamp(messyOccludedSky *
+                MESSY_VOXY_SHADOW_CONTRAST, 0.0, 1.0);
+            omniLight *= mix(1.0, 0.52, messyVoxyShadow);
+            directLightStrength *= mix(1.0, 0.70, messyVoxyShadow);
+        }
+    #endif
+
+    float block_luma = luma(blockColor.rgb);""")
+
     replace_one(pack, props,
                 "screen.RENDER_SCREEN= AA_TYPE FXAA FOG_ACTIVE FOG_ADJUST NEAR_FOG FOG_TINT NETHER_FOG_DISTANCE FOLIAGE_V <empty> <empty> PERF_IMPACT",
                 "screen.RENDER_SCREEN= AA_TYPE FXAA FOG_ACTIVE FOG_ADJUST NEAR_FOG FOG_TINT NETHER_FOG_DISTANCE FOLIAGE_V [MESSY_VOXY_SCREEN] <empty> PERF_IMPACT\n"
-                "screen.MESSY_VOXY_SCREEN= MESSY_VOXY_FOG MESSY_VOXY_FOG_START MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH [MESSY_WATER_SCREEN]")
+                "screen.MESSY_VOXY_SCREEN= MESSY_VOXY_FOG MESSY_VOXY_FOG_START MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_VOXY_SHADOW_CONTRAST [MESSY_WATER_SCREEN]")
     replace_one(pack, props,
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE POM_DEPTH POM_STEPS SS_SAMPLES",
                 "screen.LabPBR= LabPBR POM POM_SHADOW LabEMISSIVE MESSY_PBR_ENTITIES POM_DEPTH POM_STEPS SS_SAMPLES")
@@ -779,17 +857,19 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     replace_one(pack, props, "sliders = ",
                 "sliders = MESSY_AUTO_PBR_STRENGTH MESSY_AUTO_PBR_RESOLUTION "
                 "MESSY_AUTO_PBR_DISTANCE MESSY_VOXY_FOG_START "
-                "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH ")
-    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_LIGHT_HANDOFF=Match Distant Water Lighting\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Pre-Reflection Surface (Lit)\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=IntegratedPBR on Entities\noption.MESSY_PBR_ENTITIES.comment=Apply automatic texture-detail normals to mobs and other entities. Off by default; may increase GPU cost.\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
+                "MESSY_VOXY_FOG_SPAN MESSY_VOXY_FOG_STRENGTH MESSY_VOXY_SHADOW_CONTRAST MESSY_WATER_FOG_START MESSY_WATER_FOG_SPAN MESSY_WATER_FOG_STRENGTH ")
+    pack[lang] += b"\nscreen.MESSY_FEATURES=MessyShaders Settings\nscreen.MESSY_MATERIALS_SCREEN=Automatic Materials\nscreen.MESSY_VOXY_SCREEN=Voxy Distance Lighting and Fog\nscreen.MESSY_WATER_SCREEN=Voxy Water Transition\noption.MESSY_WATER_LIGHT_HANDOFF=Match Distant Water Lighting\noption.MESSY_WATER_DEBUG=Water Handoff Diagnostic\nvalue.MESSY_WATER_DEBUG.0=Off\nvalue.MESSY_WATER_DEBUG.1=Water Opacity\nvalue.MESSY_WATER_DEBUG.2=Pre-Reflection Surface (Lit)\nvalue.MESSY_WATER_DEBUG.3=Sky Reflection\nvalue.MESSY_WATER_DEBUG.4=Renderer Coverage\noption.MESSY_WATER_FOG_START=Water Fog Start Distance\noption.MESSY_WATER_FOG_SPAN=Water Fog Fade Distance\noption.MESSY_WATER_FOG_STRENGTH=Water Fog Strength\noption.MESSY_VOXY_FOG=Voxy Distance Fog\noption.MESSY_VOXY_FOG_START=Fog Start Beyond Render Distance (blocks)\noption.MESSY_VOXY_FOG_SPAN=Fog Fade Length (blocks)\noption.MESSY_VOXY_FOG_STRENGTH=Fog Strength\noption.MESSY_VOXY_SHADOW_CONTRAST=Voxy Shadow Contrast\noption.MESSY_VOXY_SHADOW_CONTRAST.comment=Darken skylight-occluded LOD terrain, with no extra ray tracing. Does not add true cast shadows. 0 restores stock lighting.\noption.MESSY_AUTO_PBR=Automatic Material Normals\noption.MESSY_PBR_ENTITIES=IntegratedPBR on Entities\noption.MESSY_PBR_ENTITIES.comment=Apply automatic texture-detail normals to mobs and other entities. Off by default; may increase GPU cost.\noption.MESSY_AUTO_PBR_STRENGTH=Automatic Normal Strength\noption.MESSY_AUTO_PBR_RESOLUTION=Automatic Normal Resolution\noption.MESSY_AUTO_PBR_DISTANCE=Automatic Normal Distance\n"
 
     replace_one(pack, props,
                 "screen.SKY_SCREEN = COLOR_SCHEME [CUSTOM_COLORS_SCREEN] <empty> <empty> SIMPLE_SKY BIOME_SKY BIOME_FOG SANDSTORM <empty> <empty> STAR_SLIDER END_STARS STARS_BRIGHTNESS STARS_COVERAGE AURORA CUSTOM_SKYFIX",
-                "screen.SKY_SCREEN = COLOR_SCHEME [CUSTOM_COLORS_SCREEN] <empty> <empty> SIMPLE_SKY BIOME_SKY BIOME_FOG SANDSTORM <empty> <empty> STAR_SLIDER END_STARS STARS_BRIGHTNESS STARS_COVERAGE AURORA CUSTOM_SKYFIX MESSY_HIDE_CUSTOM_SKY")
+                "screen.SKY_SCREEN = COLOR_SCHEME [CUSTOM_COLORS_SCREEN] <empty> <empty> SIMPLE_SKY BIOME_SKY BIOME_FOG SANDSTORM <empty> <empty> STAR_SLIDER END_STARS STARS_BRIGHTNESS STARS_COVERAGE AURORA CUSTOM_SKYFIX MESSY_HIDE_CUSTOM_SKY MESSY_HIDE_VANILLA_CELESTIALS")
     replace_one(pack, props,
                 "screen.MESSY_WATER_SCREEN= MESSY_WATER_LIGHT_HANDOFF",
                 "screen.MESSY_WATER_SCREEN= MESSY_MOON_REFLECTION MESSY_WATER_LIGHT_HANDOFF")
-    pack[lang] += (b"option.MESSY_HIDE_CUSTOM_SKY=Hide Custom Skybox Overlays\n"
-                   b"option.MESSY_HIDE_CUSTOM_SKY.comment=Suppress resource-pack sky layers but keep the regular sun, moon and stars. Requires Iris custom-sky stages.\n"
+    pack[lang] += (b"option.MESSY_HIDE_CUSTOM_SKY=Hide Resource-Pack Sky Overlays\n"
+                   b"option.MESSY_HIDE_CUSTOM_SKY.comment=Suppress Iris custom-sky layers; does not disable Golem Core or other mod sky renderers.\n"
+                   b"option.MESSY_HIDE_VANILLA_CELESTIALS=Hide Vanilla Sun and Moon\n"
+                   b"option.MESSY_HIDE_VANILLA_CELESTIALS.comment=Try this when NTM Space or another mod draws a second sun and moon. May leave only mod-rendered celestial bodies.\n"
                    b"option.MESSY_MOON_REFLECTION=Moon Reflection on Water\n"
                    b"option.MESSY_MOON_REFLECTION.comment=Independent night-time moon glint strength for nearby and Voxy water.\n"
                    b"value.MESSY_MOON_REFLECTION.0=Off\n"
