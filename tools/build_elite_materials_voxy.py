@@ -377,7 +377,7 @@ def patch(pack: dict[str, bytes]) -> None:
 
     pack[config] += (b"#define MESSY_HIDE_CUSTOM_SKY // Hide custom resource-pack sky layers\n"
                      b"#define MESSY_MOON_REFLECTION 1 // [0 1 2] Off, subtle, bright moonlight glint\n")
-    pack[config] += (b"#define MESSY_VOXY_CONTACT_SHADOWS // Voxy opaque-depth screen-space cast shadows\n"
+    pack[config] += (b"//#define MESSY_VOXY_CONTACT_SHADOWS // Experimental: depth-only shadows can misclassify foliage\n"
                      b"#define MESSY_VOXY_SHADOW_STRENGTH 0.65 // [0.0 0.25 0.5 0.65 0.75 1.0]\n"
                      b"#define MESSY_VOXY_SHADOW_STEPS 12 // [8 12 16 24]\n")
 
@@ -589,6 +589,38 @@ float messyWaterNightFogWeight(int ticks) {
         (1.0 - smoothstep(22500.0, 23900.0, moment));
 }
 
+// Source-over water needs fog composited AFTER both its translucent surface
+// and the opaque scene beneath it. Fogging source RGB alone leaves an
+// un-fogged (1-alpha) background that differs strongly at the LOD boundary.
+// A' = f + (1-f)A, C' = ((1-f)A*C + f*F) / A' is algebraically equivalent to
+// mix(A*C + (1-A)*background, F, f) with ordinary src-alpha blending.
+// At daytime nightMix=0 and this returns E-Lite's exact legacy operation.
+vec4 messyWaterFogAfterBlend(vec4 source, vec3 fogColor,
+                             float fogStrength, float nightMix) {
+    float f = clamp(fogStrength, 0.0, 1.0);
+    vec4 original = vec4(mix(source.rgb, fogColor, f), source.a);
+    float correctedAlpha = f + (1.0 - f) * source.a;
+    vec3 correctedRgb = ((1.0 - f) * source.a * source.rgb +
+        f * fogColor) / max(correctedAlpha, 0.001);
+    return mix(original, vec4(correctedRgb, correctedAlpha),
+        clamp(nightMix, 0.0, 1.0));
+}
+
+// The near renderer and Voxy have different opaque scene buffers under the
+// same translucent ocean. Even identical water RGB and absorption expose
+// this difference whenever alpha < 1. At nighttime, fade the underlying
+// scene out before the near-to-LOD handoff; keep the surface/reflections and
+// all daytime transparency unmodified. Both renderers use the same range.
+vec4 messyWaterNightHandoff(vec4 water, float cameraDistance,
+                            float nearRange, int ticks) {
+    float start = max(nearRange * 0.55, 1.0);
+    float finish = max(nearRange * 0.90, start + 1.0);
+    float handoff = smoothstep(start, finish, cameraDistance) *
+        messyWaterNightFogWeight(ticks);
+    water.a = mix(water.a, 1.0, handoff);
+    return water;
+}
+
 // Vanilla water calculates illumination in light_vertex.glsl; Voxy does it
 // later from its LOD voxel light map with different sky/daylight constants.
 // The diagnostic isolated this as the last visible chunk-shaped difference.
@@ -672,6 +704,21 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
                 vec3(0.1647, 0.3725, 0.6157), messyNightFog);
             fogInfluence = mix(fogInfluence, 1.0, messyNightFog);
         #endif''')
+    legacy_near = "block_color.rgb = mix(block_color.rgb, fog_texture, fog_adj);"
+    near_fog_source = pack[near_finalcolor].decode()
+    if near_fog_source.count(legacy_near) != 2:
+        raise ValueError("Unexpected E-Lite near-water fog branches")
+    near_fog_source = near_fog_source.replace(legacy_near, """#if defined MESSY_WATER_FINALCOLOR && defined MESSY_WATER_PARITY && defined VOXY
+                    if (block_type > 2.9 && block_type < 3.1)
+                        block_color = messyWaterFogAfterBlend(block_color,
+                            fog_texture, fog_adj,
+                            messyWaterNightFogWeight(worldTime));
+                    else
+                        block_color.rgb = mix(block_color.rgb, fog_texture, fog_adj);
+                #else
+                    block_color.rgb = mix(block_color.rgb, fog_texture, fog_adj);
+                #endif""")
+    pack[near_finalcolor] = near_fog_source.encode()
     replace_one(pack, water,
                 '#include "/lib/water_voxy.glsl"',
                 '#include "/lib/messy_water_composite.glsl"\n#include "/lib/water_voxy.glsl"')
@@ -806,6 +853,21 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
         #elif FOG_TINT == 2
             vec3 fogColorMod = mix(saturate(messyFogBase, -0.5), vec3(1.0), frogAdjust);
         #endif""")
+    legacy_far = "blockColor.rgb = mix(blockColor.rgb, fog_texture, frogAdjust);"
+    far_fog_source = pack[far_finalcolor].decode()
+    if far_fog_source.count(legacy_far) != 2:
+        raise ValueError("Unexpected E-Lite distant-water fog branches")
+    far_fog_source = far_fog_source.replace(legacy_far, """#if defined MESSY_WATER_FINALCOLOR_VOXY && defined MESSY_WATER_PARITY
+                    if (customId == ENTITY_WATER)
+                        blockColor = messyWaterFogAfterBlend(blockColor,
+                            fog_texture, frogAdjust,
+                            messyWaterNightFogWeight(worldTime));
+                    else
+                        blockColor.rgb = mix(blockColor.rgb, fog_texture, frogAdjust);
+                #else
+                    blockColor.rgb = mix(blockColor.rgb, fog_texture, frogAdjust);
+                #endif""")
+    pack[far_finalcolor] = far_fog_source.encode()
     replace_one(pack, far_lib,
                 "    bump *= vec3(NdotE) + vec3(0.0, 0.0, 1.0 - NdotE);",
                 "    bump *= vec3(NdotE) + vec3(0.05, 0.1, 1.0 - NdotE);")
@@ -955,6 +1017,11 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
     #include "/src/finalcolor.glsl"
     #if defined FOG_ACTIVE && defined MESSY_WATER_PARITY
         #undef fog_adj
+    #endif
+    #if defined MESSY_WATER_PARITY && defined VOXY
+        if (is_water > 0.5)
+            block_color = messyWaterNightHandoff(block_color,
+                gl_FogFragCoord, far, worldTime);
     #endif"""
     unified_far += """    #ifdef MESSY_WATER_PARITY
         // Override E-Lite's built-in Voxy horizon fog for water only.
@@ -963,7 +1030,14 @@ vec4 messyWaterCompose(vec3 shaded, vec3 surface, float opacity, float fresnel) 
         float messyWaterFog = messyWaterDistanceFog(fogFragCoord);
         if (customId == ENTITY_WATER) frogAdjust = messyWaterFog;
     #endif
+    #define MESSY_WATER_FINALCOLOR_VOXY
     #include "/src/finalcolor_voxy.glsl"
+    #undef MESSY_WATER_FINALCOLOR_VOXY
+    #ifdef MESSY_WATER_PARITY
+        if (customId == ENTITY_WATER)
+            blockColor = messyWaterNightHandoff(blockColor,
+                fogFragCoord, float(vxRenderDistance * 16), worldTime);
+    #endif
 """
     replace_one(pack, near_water, '    #include "/src/finalcolor.glsl"', unified_near)
     replace_one(pack, water, '    #include "/src/finalcolor_voxy.glsl"', unified_far)
